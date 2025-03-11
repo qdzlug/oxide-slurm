@@ -1,0 +1,3 @@
+- name:  Install compute node packages & enable powertools repo
+  include_tasks: tasks/compute-node-pkgs.yml
+  tags: comp_node_pkgs

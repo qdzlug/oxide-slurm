@@ -1,0 +1,56 @@
+  - name: Copy compute node DEB to /tmp
+    ansible.builtin.copy: 
+      src: "{{ item }}"
+      dest: /tmp
+    with_items:
+      - slurm_23.02.1-1_amd64.deb 
+      - slurm-pmi2_0-1_amd64.deb
+
+  - name: Install compute node RPMs
+    ansible.builtin.apt:
+      deb: "/tmp/{{ item }}" 
+      state: present
+    with_items:
+      - slurm_23.02.1-1_amd64.deb 
+      - slurm-pmi2_0-1_amd64.deb
+
+  - name: Create & change ownership of /etc/slurm/
+    file:
+      path: /etc/slurm
+      state: directory
+      owner: root
+      group: root
+      mode: 0755
+
+  - name: Copy slurm.conf into place with correct permissions
+    ansible.builtin.copy:
+     src: slurm.conf
+     dest: /etc/slurm/
+     owner: slurm
+     group: slurm
+     mode: '0755'
+
+  - name: Copy cgroup.conf into place with correct permissions
+    ansible.builtin.copy:
+     src: cgroup.conf
+     dest: /etc/slurm/
+
+  - name: Copy systemd files into /etc/slurm
+    ansible.builtin.copy:
+      src: "roles/slurmd/files/{{ item }}"
+      dest: /usr/lib/systemd/system
+      owner: slurm
+      group: slurm
+      mode: 0644
+    with_items:
+      - slurmd.service
+
+
+  - name: reload systemd
+    ansible.builtin.shell: systemctl daemon-reload
+
+  - name: Restart slurmd service
+    ansible.builtin.service:
+     name: slurmd
+     enabled: yes
+     state: restarted

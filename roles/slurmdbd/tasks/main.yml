@@ -1,0 +1,3 @@
+- name: Setup mysql database for slurm
+  include_tasks: slurmdbd-mysql.yml
+  tags: slurmdbd 

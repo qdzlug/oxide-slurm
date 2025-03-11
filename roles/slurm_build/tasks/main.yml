@@ -1,0 +1,74 @@
+- name: Checking to see if the slurm .tar.bz2 file exists
+  ansible.builtin.stat:
+    path: "/home/instructor/slurm-23.02.1.tar.bz2"
+  register: file_tar
+
+- name: Checking to see if the slurm deb has already been created
+  ansible.builtin.stat:
+    path: "/home/instructor/slurm-23.02.1/slurm_23.02.1-1_amd64.deb"
+  register: file_deb
+
+- name: download slurm
+  ansible.builtin.command:
+     cmd:  wget https://download.schedmd.com/slurm/slurm-23.02.1.tar.bz2 -P /home/instructor
+  when: not file_tar.stat.exists
+
+- name: untar the archive
+  ansible.builtin.shell: cd /home/instructor; tar jxvf slurm-23.02.1.tar.bz2
+  when: not file_deb.stat.exists
+
+- name: Configure and compile
+  ansible.builtin.shell: |
+          cd /home/instructor/slurm-23.02.1
+          ./configure --prefix=/usr --sysconfdir=/etc/slurm --enable-pam --with-pam_dir=/lib/x86_64-linux-gnu/security --with-pmix
+          make
+          cd /home/instructor/slurm-23.02.1/contrib; make
+          cd /home/instructor/slurm-23.02.1 
+          echo 'slurm package' | checkinstall -D --nodoc
+          cd /home/instructor/slurm-23.02.1/contribs/pmi2
+          make
+          echo "slurm pmi2 libs" | checkinstall -D --nodoc --pkgname=slurm-pmi2 --pkgversion=0
+  when: not file_deb.stat.exists
+
+- name: Copy deb into repo directory
+  ansible.builtin.copy:
+          src: "/home/instructor/slurm-23.02.1/{{ item }}"
+          dest: roles/slurmd/files
+  with_items:
+          - slurm_23.02.1-1_amd64.deb
+          - contribs/pmi2/slurm-pmi2_0-1_amd64.deb        
+  when: not file_deb.stat.exists
+
+- name: Copy systemd files into repo directory
+  ansible.builtin.copy:
+          src: "/home/instructor/slurm-23.02.1/etc/{{ item }}"
+          dest: roles/slurmd/files
+  with_items:
+          - slurmd.service
+          - slurmctld.service
+          - slurmdbd.service
+          - slurmrestd.service
+  when: not file_deb.stat.exists
+
+- name: Install the DEB package on the head node
+  ansible.builtin.apt:
+          deb: "roles/slurmd/files/{{ item }}" 
+          state: present 
+  with_items:
+          - slurm_23.02.1-1_amd64.deb
+          - slurm-pmi2_0-1_amd64.deb 
+  when: not file_deb.stat.exists
+
+- name: Copy systemd files into /etc/slurm
+  ansible.builtin.copy:
+          src: "roles/slurmd/files/{{ item }}"
+          dest: /usr/lib/systemd/system 
+          owner: slurm
+          group: slurm
+          mode: 0644
+  with_items:
+          - slurmd.service
+          - slurmctld.service
+          - slurmdbd.service
+          - slurmrestd.service
+            #  when: not file_deb.stat.exists

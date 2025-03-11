@@ -1,0 +1,3 @@
+- name: Install munge and copy the key
+  include_tasks: munge-key-sync.yml
+  tags: munge_key_sync

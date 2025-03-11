@@ -1,0 +1,97 @@
+####### Head Node Play ###########
+- name: Head node configuration
+  become: yes
+  gather_facts: yes
+  hosts: head_node
+  tags: head_node_play
+
+  pre_tasks:
+    - name: Enable Universe repository (Ubuntu only)
+      ansible.builtin.apt_repository:
+        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
+        state: present
+      become: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Update cache
+      ansible.builtin.apt:
+        update_cache: yes
+      become: yes
+
+    - name: Ensure passwordless sudo for Ubuntu user
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/ubuntu
+        line: "ubuntu ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        state: present
+        mode: "0440"
+      become: yes
+
+    - name: Ensure secure_path does not interfere with sudo
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers
+        line: "Defaults !secure_path"
+        state: present
+      become: yes
+
+    - name: Gather facts after sudo fix
+      ansible.builtin.setup:
+      become: yes
+
+  roles:
+    - timesync
+    - head-node_pkg_inst
+    - head-node_nfs_server
+    - slurm-user
+    - slurm_build
+    - head-node_munge_key
+    - slurmdbd
+
+
+####### Compute Node Play ###########
+- name: Compute node configuration
+  become: yes
+  gather_facts: yes
+  hosts: compute
+  tags: compute_node_play
+
+  pre_tasks:
+    - name: Enable Universe repository (Ubuntu only)
+      ansible.builtin.apt_repository:
+        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
+        state: present
+      become: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Update cache
+      ansible.builtin.apt:
+        update_cache: yes
+      become: yes
+
+    - name: Ensure passwordless sudo for Ubuntu user
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/ubuntu
+        line: "ubuntu ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        state: present
+        mode: "0440"
+      become: yes
+
+    - name: Ensure secure_path does not interfere with sudo
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers
+        line: "Defaults !secure_path"
+        state: present
+      become: yes
+
+    - name: Gather facts after sudo fix
+      ansible.builtin.setup:
+      become: yes
+
+  roles:
+    - timesync
+    - compute-node_pkg_inst
+    - compute-node_autofs
+    - slurm-user
+    - compute-node_munge_key
+    - slurmd

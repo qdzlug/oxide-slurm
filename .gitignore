@@ -1,0 +1,38 @@
+# Terraform Files
+.terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfvars
+terraform.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+crash.log
+.terraform.lock.hcl
+
+# Ansible Files
+*.retry
+inventory
+secrets.yml
+group_vars/*.vault.yml
+host_vars/*.vault.yml
+!group_vars/
+!host_vars/
+*.vault-pass
+ansible.log
+
+# Python Virtual Environment (if used for Ansible)
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Editor/IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
