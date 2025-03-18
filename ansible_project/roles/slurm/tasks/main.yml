@@ -1,0 +1,198 @@
+---
+# SLURM BUILD & INSTALL Tasks (Head Node Only)
+- name: Install fpm using gem on head node
+  command: /usr/bin/gem install fpm
+  args:
+    creates: /usr/local/bin/fpm
+  when: inventory_hostname in groups['head_node']
+
+- name: Create temporary build directory on head node
+  file:
+    path: "{{ slurm_build_path }}"
+    state: directory
+  when: inventory_hostname in groups['head_node']
+
+- name: Create directory for Slurm deb packages on head node
+  file:
+    path: "{{ slurm_package_repo }}"
+    state: directory
+  when: inventory_hostname in groups['head_node']
+
+- name: Download Slurm source on head node
+  get_url:
+    url: "https://download.schedmd.com/slurm/slurm-{{ slurm_version }}.tar.bz2"
+    dest: "{{ slurm_build_path }}/slurm-{{ slurm_version }}.tar.bz2"
+    mode: '0644'
+  when: inventory_hostname in groups['head_node']
+
+- name: Extract Slurm source on head node
+  unarchive:
+    src: "{{ slurm_build_path }}/slurm-{{ slurm_version }}.tar.bz2"
+    dest: "{{ slurm_build_path }}/"
+    remote_src: yes
+    extra_opts: [--strip-components=1]
+  when: inventory_hostname in groups['head_node']
+
+- name: Configure Slurm on head node
+  command: ./configure --prefix=/usr --sysconfdir="{{ slurm_config_path }}" --enable-pam --without-shared-libslurm --with-mysql --with-systemdsystemunitdir=/lib/systemd/system
+  args:
+    chdir: "{{ slurm_build_path }}"
+  when: inventory_hostname in groups['head_node']
+
+- name: Build Slurm on head node
+  command: make -j"{{ ansible_processor_vcpus }}"
+  args:
+    chdir: "{{ slurm_build_path }}"
+  when: inventory_hostname in groups['head_node']
+
+- name: Install Slurm to temporary package directory on head node
+  command: make install DESTDIR={{ slurm_build_path }}/package
+  args:
+    chdir: "{{ slurm_build_path }}"
+  when: inventory_hostname in groups['head_node']
+
+- name: Check if Slurm .deb package exists on head node
+  stat:
+    path: "{{ slurm_build_path }}/slurm_{{ slurm_version }}_amd64.deb"
+  register: slurm_deb_file
+  when: inventory_hostname in groups['head_node']
+
+- name: Create .deb package using fpm on head node
+  command: /usr/local/bin/fpm -s dir -t deb -n slurm -v "{{ slurm_version }}" -C {{ slurm_build_path }}/package .
+  args:
+    chdir: "{{ slurm_build_path }}"
+  when:
+    - inventory_hostname in groups['head_node']
+    - not slurm_deb_file.stat.exists
+
+- name: Copy built Slurm .deb package to package repository on head node
+  copy:
+    src: "{{ slurm_build_path }}/slurm_{{ slurm_version }}_amd64.deb"
+    dest: "{{ slurm_package_repo }}/slurm_{{ slurm_version }}_amd64.deb"
+    remote_src: yes
+  when: inventory_hostname in groups['head_node']
+
+# SLURM PACKAGE INSTALLATION (Headnode)
+- name: Install Slurm from shared NFS repository on compute nodes
+  apt:
+    deb: "{{ slurm_package_repo }}/slurm_{{ slurm_version }}_amd64.deb"
+  when: inventory_hostname in groups['head_node']
+
+# SLURM PACKAGE INSTALLATION (Compute Nodes)
+- name: Install Slurm from shared NFS repository on compute nodes
+  apt:
+    deb: "{{ slurm_package_repo }}/slurm_{{ slurm_version }}_amd64.deb"
+  when: inventory_hostname in groups['compute']
+
+# SLURM CONFIGURATION DISTRIBUTION
+- name: Ensure /etc/slurm directory exists
+  file:
+    path: "{{ slurm_config_path }}"
+    state: directory
+    owner: slurm
+    group: slurm
+    mode: '0755'
+
+- name: Ensure Slurm spool directories exist
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: slurm
+    group: slurm
+    mode: '0755'
+  loop:
+    - /var/spool/slurm
+    - /var/spool/slurm/d
+    - /var/spool/slurm/slurmctld
+    - /var/spool/slurm/cluster_state
+
+# Generate slurm.conf on head node using a Jinja2 template
+- name: Generate slurm.conf on head node
+  template:
+    src: "slurm.conf.j2"
+    dest: "{{ slurm_config_path }}/slurm.conf"
+    owner: slurm
+    group: slurm
+    mode: '0644'
+  when: inventory_hostname in groups['head_node']
+
+# Distribute slurm.conf from head node to compute nodes
+- name: Fetch slurm.conf from head node
+  fetch:
+    src: "{{ slurm_config_path }}/slurm.conf"
+    dest: "/tmp/slurm.conf"
+    flat: yes
+  delegate_to: "{{ groups['head_node'][0] }}"
+  run_once: true
+
+- name: Copy slurm.conf to compute node
+  copy:
+    src: "/tmp/slurm.conf"
+    dest: "{{ slurm_config_path }}/slurm.conf"
+    owner: slurm
+    group: slurm
+    mode: '0644'
+  when: inventory_hostname in groups['compute']
+
+- name: Generate cgroup.conf
+  copy:
+    dest: "{{ slurm_config_path }}/cgroup.conf"
+    content: |
+      CgroupAutomount=yes
+      ConstrainCores=yes
+      ConstrainRAMSpace=yes
+      ConstrainSwapSpace=yes
+    owner: slurm
+    group: slurm
+    mode: '0644'
+
+- name: Generate gres.conf (if GPUs are present)
+  copy:
+    dest: "{{ slurm_config_path }}/gres.conf"
+    content: |
+      Name=gpu Type=tesla File=/dev/nvidia0
+    owner: slurm
+    group: slurm
+    mode: '0644'
+  when: "'gpu' in ansible_facts['devices']"
+
+# Tasks for setting up SlurmDBD configuration (head node only)
+- name: "Create slurmdbd.conf if accounting is enabled and file does not exist"
+  copy:
+    dest: "{{ slurm_config_path }}/slurmdbd.conf"
+    content: |
+      # Slurm DBD configuration file
+      StorageType=accounting_storage/mysql
+      DbdAddr=localhost
+      DbdHost=localhost
+      StorageHost=localhost
+      StorageLoc={{ slurm_db_name }}
+      StorageUser={{ slurm_db_user }}
+      SlurmUser={{ slurm_db_user }}
+      StoragePass={{ slurm_db_pass }}
+      StoragePort=3306
+      LogFile=/var/log/slurmdbd.log
+    owner: slurm
+    group: slurm
+    mode: '0600'
+  when:
+    - inventory_hostname in groups['head_node']
+
+# Ensure slurmd and slurmctld are enabled and started on all nodes
+- name: Ensure slurmd and slurmctld services are enabled and started on all nodes
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - slurmd
+    - slurmctld
+
+# Ensure slurmdbd is enabled and started on head node only
+- name: Ensure slurmdbd service is enabled and started on head node
+  systemd:
+    name: slurmdbd
+    state: started
+    enabled: yes
+  when: inventory_hostname in groups['head_node']
+

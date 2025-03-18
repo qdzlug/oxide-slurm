@@ -1,0 +1,100 @@
+---
+# Verification Tasks
+
+# Verify Munge key on compute nodes
+- name: Verify Munge key exists on compute nodes
+  stat:
+    path: "{{ munge_key_path }}"
+  register: munge_key_check
+  when: inventory_hostname in groups['compute']
+
+- name: Fail if Munge key is missing on compute node
+  fail:
+    msg: "Munge key is missing on compute node {{ inventory_hostname }}!"
+  when: inventory_hostname in groups['compute'] and not munge_key_check.stat.exists
+
+# Check Munge service status on all nodes
+- name: Check Munge service status on all nodes
+  command: systemctl is-active munge
+  register: munge_status
+  ignore_errors: true
+
+- name: Fail if Munge service is not active on {{ inventory_hostname }}
+  fail:
+    msg: "Munge service is not running on {{ inventory_hostname }}"
+  when: munge_status.rc != 0
+
+# Check Slurm services on head node
+- name: Check Slurm services on head node
+  command: systemctl is-active {{ item }}
+  register: slurm_services_status
+  ignore_errors: true
+  loop:
+    - slurmctld
+    - slurmdbd
+  when: inventory_hostname in groups['head_node']
+
+- name: Fail if any Slurm service is not active on head node
+  fail:
+    msg: "Slurm service {{ item.item }} is not running on head node {{ inventory_hostname }}: {{ item.stdout }}"
+  loop: "{{ slurm_services_status.results }}"
+  when: inventory_hostname in groups['head_node'] and item.rc != 0
+
+# Check slurmd on compute nodes
+- name: Check slurmd status on compute nodes
+  command: systemctl is-active slurmd
+  register: slurm_compute_status
+  ignore_errors: true
+  when: inventory_hostname in groups['compute']
+
+- name: Fail if slurmd is not active on compute node
+  fail:
+    msg: "slurmd is not running on compute node {{ inventory_hostname }}"
+  when: inventory_hostname in groups['compute'] and slurm_compute_status.rc != 0
+
+# Validate connectivity: Ping head node from compute nodes
+- name: Ping head node to ensure connectivity from compute node
+  command: ping -c 3 {{ slurm_control_host }}
+  register: ping_head
+  when: inventory_hostname in groups['compute']
+
+- name: Fail if head node is unreachable from compute node
+  fail:
+    msg: "Head node ({{ slurm_control_host }}) is unreachable from compute node {{ inventory_hostname }}."
+  when: inventory_hostname in groups['compute'] and ping_head.rc != 0
+
+# Retrieve and show Slurm cluster status on head node
+- name: Retrieve Slurm node status from head node
+  command: scontrol show nodes
+  register: slurm_nodes
+  when: inventory_hostname in groups['head_node']
+
+- name: Debug Slurm node status output on head node
+  debug:
+    msg: "{{ slurm_nodes.stdout }}"
+  when: inventory_hostname in groups['head_node']
+
+# Attempt to resume any drained nodes (on head node)
+- name: Attempt to resume any drained nodes
+  command: scontrol update NodeName={{ item }} state=RESUME
+  loop: "{{ slurm_nodes.stdout | regex_findall('\\bNodeName=(\\S+)\\b.*State=(Drain|DOWN|FAIL)', multiline=True) | map(attribute=0) | list }}"
+  when: inventory_hostname in groups['head_node']
+  ignore_errors: true
+
+- name: Re-check Slurm node status after resume attempts
+  command: scontrol show nodes
+  register: slurm_nodes_after
+  when: inventory_hostname in groups['head_node']
+
+- name: Fail if any node is still not ready on head node
+  fail:
+    msg: "One or more nodes are still not ready: {{ slurm_nodes_after.stdout }}"
+  when: inventory_hostname in groups['head_node'] and (slurm_nodes_after.stdout | regex_search("State=.*(Drain|DOWN|FAIL)", "i"))
+
+# Print SSH connection commands for all nodes (Demo)
+- name: Display SSH connection commands for all nodes in the cluster
+  debug:
+    msg: "ssh -o StrictHostKeyChecking=no {{ hostvars[item].ansible_user }}@{{ hostvars[item].ansible_host }}  # {{ item }}"
+  loop: "{{ groups['slurm_cluster'] }}"
+  run_once: true
+  delegate_to: localhost

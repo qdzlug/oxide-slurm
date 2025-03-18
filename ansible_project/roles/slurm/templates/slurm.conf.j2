@@ -1,0 +1,27 @@
+ClusterName=slurm_cluster
+ControlMachine={{ hostvars[groups['head_node'][0]].ansible_hostname }}
+SlurmUser=slurm
+SlurmdUser=root
+SlurmdPort=6818
+SlurmctldPort=6817
+AuthType=auth/munge
+StateSaveLocation=/var/spool/slurm/ctld
+SlurmdSpoolDir=/var/spool/slurm/d
+SlurmctldTimeout=300
+SlurmdTimeout=300
+SchedulerType=sched/backfill
+SelectType=select/cons_res
+SelectTypeParameters=CR_CPU_Memory
+AccountingStorageType=accounting_storage/slurmdbd
+
+# Head Node Definition (Controller)
+NodeName={{ hostvars[groups['head_node'][0]].ansible_hostname }} CPUs={{ hostvars[groups['head_node'][0]].ansible_processor_vcpus }} Boards=1 SocketsPerBoard={{ hostvars[groups['head_node'][0]].ansible_processor_count }} CoresPerSocket={{ hostvars[groups['head_node'][0]].ansible_processor_cores }} State=UNKNOWN
+
+# Compute Node Definitions
+{% for host in groups['compute'] %}
+NodeName={{ hostvars[host].ansible_hostname }} CPUs={{ hostvars[host].ansible_processor_vcpus }} Boards=1 SocketsPerBoard={{ hostvars[host].ansible_processor_count }} CoresPerSocket={{ hostvars[host].ansible_processor_cores }} State=UNKNOWN
+{% endfor %}
+
+# Partitions
+PartitionName=controller Nodes={{ hostvars[groups['head_node'][0]].ansible_hostname }} Default=YES MaxTime=INFINITE State=UP
+PartitionName=compute Nodes={% for host in groups['compute'] %}{{ hostvars[host].ansible_hostname }}{% if not loop.last %},{% endif %}{% endfor %} Default=YES MaxTime=INFINITE State=UP

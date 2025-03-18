@@ -1,0 +1,81 @@
+---
+# Common tasks
+
+# Install packages on head_node (controller)
+- name: Install packages on headnode
+  apt:
+    name:
+      - bzip2
+      - python3
+      - gcc
+      - openssl
+      - numactl
+      - hwloc
+      - lua5.3
+      - man2html
+      - make
+      - ruby
+      - ruby-dev
+      - libmunge-dev
+      - libpam0g-dev
+      - libdbus-1-dev
+      - wget
+      - dpkg-dev
+      - mariadb-server
+      - mariadb-client
+      - libmariadb-dev
+      - munge
+      - libmunge2
+      - nfs-kernel-server
+      - nfs-common
+    state: present
+    update_cache: yes
+  when: inventory_hostname in groups['head_node']
+
+# Minimal package set for compute nodes
+- name: Install required packages for compute nodes
+  apt:
+    name:
+      - bzip2
+      - python3
+      - munge
+      - libmunge2
+      - nfs-common
+    state: present
+    update_cache: yes
+  when: inventory_hostname in groups['compute']
+
+# Update /etc/hosts for internal resolution
+- name: Add internal hostnames and IP addresses to /etc/hosts
+  blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE HOSTS BLOCK"
+    block: |
+      {% for host in groups['all'] %}
+      {{ hostvars[host].ansible_default_ipv4.address }} {{ hostvars[host].inventory_hostname }}
+      {% endfor %}
+
+# User and Group Setup
+- name: Ensure slurm group exists with GID 967
+  group:
+    name: slurm
+    gid: 967
+    state: present
+
+- name: Ensure slurm user exists with UID 967
+  user:
+    name: slurm
+    uid: 967
+    group: slurm
+    home: /var/lib/slurm
+    shell: /bin/bash
+    comment: "SLURM workload manager"
+    create_home: yes
+    state: present
+
+- name: Add ubuntu to the slurm group
+  user:
+    name: ubuntu
+    groups: slurm
+    append: yes
+  become: yes

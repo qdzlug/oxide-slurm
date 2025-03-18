@@ -1,0 +1,25 @@
+ClusterName=slurm_cluster
+ControlMachine={% if inventory_hostname == groups['all'][0] %}{{ ansible_hostname }}{% else %}{{ hostvars[groups['all'][0]].ansible_hostname }}{% endif %}
+
+SlurmUser=slurm
+SlurmdUser=root
+SlurmdPort=6818
+SlurmctldPort=6817
+AuthType=auth/munge
+StateSaveLocation=/var/spool/slurm/ctld
+SlurmdSpoolDir=/var/spool/slurm/d
+SlurmctldTimeout=300
+SlurmdTimeout=300
+SchedulerType=sched/backfill
+SelectType=select/cons_res
+SelectTypeParameters=CR_CPU_Memory
+
+{% if inventory_hostname == groups['all'][0] %}
+# Head Node Configuration
+NodeName={{ ansible_hostname }} State=UNKNOWN
+PartitionName=controller Nodes={{ ansible_hostname }} Default=YES MaxTime=INFINITE State=UP
+{% else %}
+# Compute Nodes
+NodeName={{ ansible_hostname }} State=UNKNOWN
+PartitionName=compute Nodes={{ ansible_hostname }} Default=YES MaxTime=INFINITE State=UP
+{% endif %}

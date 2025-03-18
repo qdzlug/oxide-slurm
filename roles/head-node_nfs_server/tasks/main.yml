@@ -1,3 +1,0 @@
-- name:  Install NFS server package and export /head/NFS
-  include_tasks: nfs_server.yml
-  tags: nfs_server

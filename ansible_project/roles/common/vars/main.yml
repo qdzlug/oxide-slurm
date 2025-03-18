@@ -1,0 +1,19 @@
+---
+# Common Variables
+slurm_version: "22.05.9"
+slurm_db_user: "slurm"
+slurm_db_pass: "SecurePass123"
+slurm_db_name: "slurm_acct_db"
+
+# Paths for Munge, Slurm configuration, build, package repo, and NFS share
+munge_key_path: "/etc/munge/munge.key"
+slurm_config_path: "/etc/slurm"
+slurm_build_path: "/tmp/slurm-build"
+slurm_package_repo: "/data/packages"
+slurm_nfs_share: "/data"
+slurm_nfs_mount: "/data"
+slurm_partition_name: "compute"
+munge_nfs_path: "{{ slurm_nfs_share }}/munge"
+
+# Set the NFS server IP using the ansible_default_ipv4 address from the first head_node
+slurm_control_host: "{{ hostvars[groups['head_node'][0]].ansible_default_ipv4.address }}"

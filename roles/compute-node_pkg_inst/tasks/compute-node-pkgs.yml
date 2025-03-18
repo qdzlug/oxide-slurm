@@ -1,4 +1,0 @@
-  - name: Compute node packages
-    ansible.builtin.apt:
-      name: gcc, g++ 
-      state: present 
