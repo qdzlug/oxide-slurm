@@ -1,7 +1,7 @@
 # slurm.conf for SLURM 24.11.3
 #
 ClusterName={{ slurm_cluster_name | default("slurm_cluster") }}
-ControlMachine={{ slurm_control_host }}
+ControlMachine={{ slurm_control_machine | default(hostvars[groups['head_node'][0]].inventory_hostname) }}
 SlurmUser={{ slurm_user | default("slurm") }}
 SlurmdUser={{ slurmd_user | default("root") }}
 AuthType=auth/munge
@@ -26,10 +26,15 @@ ReturnToService={{ return_to_service | default("2") }}
 MpiDefault={{ mpi_default | default("none") }}
 TaskPlugin={{ task_plugin | default("task/affinity") }}
 
-# Node definitions for compute nodes (generated dynamically from inventory)
+# Node Definitions for Head Node(s)
+{% for host in groups['head_node'] %}
+NodeName={{ hostvars[host].inventory_hostname }} CPUs={{ hostvars[host].ansible_processor_vcpus | default(1) }} RealMemory={{ hostvars[host].ansible_memtotal_mb | default(1024) }} State=UNKNOWN
+{% endfor %}
+
+# Node Definitions for Compute Nodes
 {% for host in groups['compute'] %}
 NodeName={{ hostvars[host].inventory_hostname }} CPUs={{ hostvars[host].ansible_processor_vcpus | default(1) }} RealMemory={{ hostvars[host].ansible_memtotal_mb | default(1024) }} State=UNKNOWN
 {% endfor %}
 
-# Partition definition using the list of compute nodes (comma separated)
-PartitionName={{ slurm_partition_name | default("debug") }} Nodes={{ groups['compute'] | join(",") }} Default=YES MaxTime=INFINITE State=UP
+# Partition Definition using compute nodes only (adjust if you wish to include head nodes)
+PartitionName={{ slurm_partition_name | default("debug") }} Nodes={% for host in groups['compute'] %}{{ hostvars[host].inventory_hostname }}{% if not loop.last %},{% endif %}{% endfor %} Default=YES MaxTime=INFINITE State=UP
