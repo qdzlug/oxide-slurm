@@ -1,6 +1,7 @@
 # Slurm Cluster Terraform Deployment
 
-This project uses Terraform with the Oxide provider to deploy a Slurm cluster in the cloud. The Terraform configuration creates the following resources:
+This project uses Terraform with the Oxide provider to deploy a Slurm cluster to an Oxide rack.
+The Terraform configuration creates the following resources:
 
 - **Project Data:** Fetches project information.
 - **SSH Key:** Creates an SSH key resource for instance access.
@@ -8,7 +9,6 @@ This project uses Terraform with the Oxide provider to deploy a Slurm cluster in
 - **Instance Disks:** Provisions disks for compute nodes.
 - **Compute Instances:** Deploys the required number of compute instances with the Oxide provider.
 - **External IPs:** Retrieves external IP addresses for the deployed instances.
-- **Firewall Rules:** Creates firewall rules to allow internal cluster traffic (all protocols) and SSH access from anywhere.
 - **Inventory File:** Generates an Ansible inventory file (`hosts.ini`) based on the external IPs of the deployed instances.
 
 ## Directory Structure
@@ -78,24 +78,12 @@ Variables are defined in `variables.tf` and typically include:
 
 You can override variable values using a `terraform.tfvars` file or via the command line.
 
-## Firewall Rules
-
-The Terraform configuration includes two firewall rule resources:
-
-- **Internal Traffic Rule:**  
-  Allows all TCP, UDP, and ICMP traffic between internal nodes. This rule targets the default subnet of your VPC.
-
-- **SSH Rule:**  
-  Allows inbound SSH traffic (TCP port 22) from anywhere by using an IP network filter with `0.0.0.0/0`.
-
 ## Ansible Inventory File
 
 The `local_file` resource uses the template file `templates/hosts.ini.tpl` to generate an inventory file (`hosts.ini`). This file groups the head node and compute nodes, and is used by your Ansible playbooks to further configure the cluster.
 
 ## Additional Notes
 
-- **Firewall Rule Targeting:**  
-  The internal traffic rule uses the VPC and subnet names from your other Terraform resources to ensure proper targeting.
 - **Node Naming:**  
   The first instance (index 0) is designated as the head node, and the remaining instances become compute nodes.
 - **Post-deployment:**  
@@ -109,4 +97,4 @@ The `local_file` resource uses the template file `templates/hosts.ini.tpl` to ge
 
 ## License
 
-This project is provided under the [MIT License](LICENSE) (or another license of your choice).
+This project is provided under the [MIT License](LICENSE).
