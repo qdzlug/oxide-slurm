@@ -1,6 +1,8 @@
 # Slurm Cluster Setup with Ansible
 
-This project uses Ansible to deploy and configure a Slurm cluster with a shared NFS-based package distribution system. It is designed to set up both head (controller) and compute nodes, manage user/group configuration, distribute the Munge key, build and install Slurm, and verify that the cluster is operational.
+This project uses Ansible to deploy and configure a Slurm cluster with a shared NFS-based data location.
+It is designed to set up both head (controller) and compute nodes, manage user/group configuration, 
+distribute the Munge key, build and install Slurm, and verify that the cluster is operational.
 
 ## Directory Structure
 
@@ -73,7 +75,9 @@ Common variables are defined in `roles/common/vars/main.yml` and include:
 ## Usage
 
 1. **Prepare Your Inventory**  
-   Create or update your `inventory/hosts.ini` file with the correct host definitions. For example:
+   Create or update your `inventory/hosts.ini` file with the correct host definitions. If you used the included 
+terraform to deploy your infrastructure this is created for you. However, if you are deploying manually or using
+a different infrastructure provider you will want to adhere to this format:
 
    ```ini
    [head_node]
@@ -91,9 +95,10 @@ Common variables are defined in `roles/common/vars/main.yml` and include:
    ```
 
 2. **Run the Playbook**  
-   From your project directory, run:
-   ```bash
-   ansible-playbook -i inventory/hosts.ini playbook.yml
+   From your project directory, run the play. You can include the `-i` flag to specify the inventory file if it's not in the default location or if you want to use a different inventory file. The ansible config file in the project root will set the default to `inventory/hosts.ini`.
+   
+ ```bash
+   ansible-playbook  playbook.yml
    ```
 
 3. **Verify Deployment**  
@@ -128,3 +133,9 @@ Common variables are defined in `roles/common/vars/main.yml` and include:
 
 - **Templates:**  
   The `slurm.conf.j2` template in `roles/slurm/templates/` is used to generate the Slurm configuration file dynamically, using Ansible facts to automatically detect hardware on each node.
+
+## Next Steps
+At this point, you can use the Slurm cluster for job scheduling and management. You may want to further customize the Slurm configuration or add additional roles for specific applications or services.
+
+New to Slurm? You can find more information in the [Slurm Quickstart](https://slurm.schedmd.com/quickstart.html) guide 
+and in the [Slurm documentation](https://slurm.schedmd.com/documentation.html).
