@@ -94,7 +94,7 @@ EOF
 }
 
 resource "local_file" "ansible_inventory" {
-  filename = "${path.root}/../ansible_project/inventory/hosts.ini"
+  filename = "${path.root}/../ansible/inventory/hosts.ini"
   content = templatefile("${path.root}/templates/hosts.ini.tpl", {
     headnode_ip = data.oxide_instance_external_ips.slurm["0"].external_ips[0].ip,
     compute_ips = [for key, instance in data.oxide_instance_external_ips.slurm : instance.external_ips[0].ip if tonumber(key) > 0]
