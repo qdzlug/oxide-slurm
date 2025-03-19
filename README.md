@@ -1,4 +1,4 @@
-# Slurm Cluster Deployment Project
+# Deploying a Slurm Cluster to an Oxide Rack
 
 This project demonstrates a complete end-to-end solution for deploying a [Slurm](https://slurm.schedmd.com/documentation.html)
 cluster to an [Oxide](https://oxide.computer) rack. It uses [**Terraform**](https://www.terraform.io/) or 
