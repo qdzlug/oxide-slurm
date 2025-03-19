@@ -42,7 +42,7 @@ setting up NFS, Munge, and Slurm, and verifying node readiness).
 git clone https://github.com/qdzlu/oxide-slurm.git
 ````
 
-### 3. Provision Infrastructure with Terraform
+### 1. Provision Infrastructure with Terraform
 - Navigate to the Terraform directory:
   ```bash
   cd terraform
