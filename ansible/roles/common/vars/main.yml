@@ -1,6 +1,6 @@
 ---
 # Common Variables
-slurm_version: "22.05.9"
+slurm_version: "24.11.3"
 slurm_db_user: "slurm"
 slurm_db_pass: "SecurePass123"
 slurm_db_name: "slurm_acct_db"
