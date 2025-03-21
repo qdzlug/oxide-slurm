@@ -89,12 +89,14 @@
 - name: Fail if any node is still not ready on head node
   fail:
     msg: "One or more nodes are still not ready: {{ slurm_nodes_after.stdout }}"
-  when: inventory_hostname in groups['head_node'] and (slurm_nodes_after.stdout | regex_search("State=.*(Drain|DOWN|FAIL)", "i"))
+  ##when: inventory_hostname in groups['head_node'] and (slurm_nodes_after.stdout | regex_search("State=.*(Drain|DOWN|FAIL)", "i"))
+  when: inventory_hostname in groups['head_node'] and (slurm_nodes_after.stdout | regex_search("(?i)State=.*(Drain|DOWN|FAIL)"))
+
 
 # Print SSH connection commands for all nodes (Demo)
 - name: Display SSH connection commands for all nodes in the cluster
   debug:
-    msg: "ssh -o StrictHostKeyChecking=no {{ hostvars[item].ansible_user }}@{{ hostvars[item].ansible_host }}  # {{ item }}"
+    msg: "{{ item }}: ssh -o StrictHostKeyChecking=no {{ hostvars[item].ansible_user }}@{{ hostvars[item].ansible_host }}"
   loop: "{{ groups['slurm_cluster'] }}"
   run_once: true
   delegate_to: localhost

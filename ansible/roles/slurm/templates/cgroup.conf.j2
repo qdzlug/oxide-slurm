@@ -1,0 +1,4 @@
+# cgroup.conf for SLURM 24.11.3
+ConstrainCores={{ constrain_cores | default("yes") }}
+ConstrainRAMSpace={{ constrain_ram | default("yes") }}
+ConstrainSwapSpace={{ constrain_swap | default("yes") }}

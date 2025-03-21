@@ -29,7 +29,8 @@
     state: started
   when: inventory_hostname in groups['head_node']
 
-# On Compute Nodes (NFS Client)
+# Configure NFS mount on compute nodes in /etc/fstab (client-side)
+
 - name: Ensure NFS mount directory exists on compute nodes
   file:
     path: "{{ slurm_nfs_mount }}"
@@ -42,7 +43,7 @@
 - name: Configure NFS mount in /etc/fstab on compute nodes
   lineinfile:
     path: /etc/fstab
-    line: "{{ slurm_control_host }}:{{ slurm_nfs_share }} {{ slurm_nfs_mount }} nfs rw,sync,no_root_squash,no_subtree_check,sec=sys 0 0"
+    line: "{{ slurm_control_host }}:{{ slurm_nfs_share }} {{ slurm_nfs_mount }} nfs rw,sync,sec=sys 0 0"
   when: inventory_hostname in groups['compute']
 
 - name: Mount NFS share on compute nodes using mount module
@@ -50,37 +51,8 @@
     path: "{{ slurm_nfs_mount }}"
     src: "{{ slurm_control_host }}:{{ slurm_nfs_share }}"
     fstype: nfs
-    opts: "rw,sync,no_root_squash,no_subtree_check,sec=sys"
+    opts: "rw,sync,sec=sys"
     state: mounted
   when: inventory_hostname in groups['compute']
-
-
-- name: Configure NFS mount on compute nodes in /etc/fstab
-  lineinfile:
-    path: /etc/fstab
-    line: "{{ slurm_control_host }}:{{ slurm_nfs_share }} {{ slurm_nfs_mount }} nfs defaults 0 0"
-  when: inventory_hostname in groups['compute']
-#
-#- name: Mount NFS share on compute nodes using mount module
-#  mount:
-#    path: "{{ slurm_nfs_mount }}"
-#    src: "{{ slurm_control_host }}:{{ slurm_nfs_share }}"
-#    fstype: nfs
-#    opts: defaults
-#    state: mounted
-#  when: inventory_hostname in groups['compute']
-#
-#
-#- name: Wait until NFS share is mounted on compute nodes
-#  shell: mountpoint -q "{{ slurm_nfs_mount }}"
-#  register: mountpoint_check
-#  retries: 30
-#  delay: 10
-#  until: mountpoint_check.rc == 0
-#  when: inventory_hostname in groups['compute']
-#
-#- name: Mount NFS share on compute nodes
-#  command: mount -a
-#  when: inventory_hostname in groups['compute']
 
 # Handler for NFS server restart (in roles/nfs/handlers/main.yml)

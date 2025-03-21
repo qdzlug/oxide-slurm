@@ -1,27 +1,40 @@
-ClusterName=slurm_cluster
-ControlMachine={{ hostvars[groups['head_node'][0]].ansible_hostname }}
-SlurmUser=slurm
-SlurmdUser=root
-SlurmdPort=6818
-SlurmctldPort=6817
+# slurm.conf for SLURM 24.11.3
+#
+ClusterName={{ slurm_cluster_name | default("slurm_cluster") }}
+ControlMachine={{ slurm_control_machine | default(hostvars[groups['head_node'][0]].inventory_hostname) }}
+SlurmUser={{ slurm_user | default("slurm") }}
+SlurmdUser={{ slurmd_user | default("root") }}
 AuthType=auth/munge
-StateSaveLocation=/var/spool/slurm/ctld
-SlurmdSpoolDir=/var/spool/slurm/d
-SlurmctldTimeout=300
-SlurmdTimeout=300
-SchedulerType=sched/backfill
-SelectType=select/cons_res
-SelectTypeParameters=CR_CPU_Memory
-AccountingStorageType=accounting_storage/slurmdbd
 
-# Head Node Definition (Controller)
-NodeName={{ hostvars[groups['head_node'][0]].ansible_hostname }} CPUs={{ hostvars[groups['head_node'][0]].ansible_processor_vcpus }} Boards=1 SocketsPerBoard={{ hostvars[groups['head_node'][0]].ansible_processor_count }} CoresPerSocket={{ hostvars[groups['head_node'][0]].ansible_processor_cores }} State=UNKNOWN
+# Ports and Logging
+SlurmctldPort={{ slurmctld_port | default("6817") }}
+SlurmdPort={{ slurmd_port | default("6818") }}
+SlurmctldLogFile={{ slurmctld_logfile | default("/var/log/slurmctld.log") }}
+SlurmdLogFile={{ slurmd_logfile | default("/var/log/slurmd.log") }}
+SlurmctldPidFile={{ slurmctld_pidfile | default("/var/run/slurmctld.pid") }}
+SlurmdPidFile={{ slurmd_pidfile | default("/var/run/slurmd.pid") }}
 
-# Compute Node Definitions
-{% for host in groups['compute'] %}
-NodeName={{ hostvars[host].ansible_hostname }} CPUs={{ hostvars[host].ansible_processor_vcpus }} Boards=1 SocketsPerBoard={{ hostvars[host].ansible_processor_count }} CoresPerSocket={{ hostvars[host].ansible_processor_cores }} State=UNKNOWN
+# State and Spool Directories
+StateSaveLocation={{ state_save_location | default("/var/spool/slurm/ctld") }}
+SlurmdSpoolDir={{ slurmd_spool_dir | default("/var/spool/slurm/d") }}
+
+# Scheduling
+SchedulerType={{ scheduler_type | default("sched/backfill") }}
+SelectType={{ select_type | default("select/cons_tres") }}
+SelectTypeParameters={{ select_type_parameters | default("CR_Core") }}
+ReturnToService={{ return_to_service | default("2") }}
+MpiDefault={{ mpi_default | default("none") }}
+TaskPlugin={{ task_plugin | default("task/affinity") }}
+
+# Node Definitions for Head Node(s)
+{% for host in groups['head_node'] %}
+NodeName={{ hostvars[host].inventory_hostname }} CPUs={{ hostvars[host].ansible_processor_vcpus | default(1) }} RealMemory={{ hostvars[host].ansible_memtotal_mb | default(1024) }} State=UNKNOWN
 {% endfor %}
 
-# Partitions
-PartitionName=controller Nodes={{ hostvars[groups['head_node'][0]].ansible_hostname }} Default=YES MaxTime=INFINITE State=UP
-PartitionName=compute Nodes={% for host in groups['compute'] %}{{ hostvars[host].ansible_hostname }}{% if not loop.last %},{% endif %}{% endfor %} Default=YES MaxTime=INFINITE State=UP
+# Node Definitions for Compute Nodes
+{% for host in groups['compute'] %}
+NodeName={{ hostvars[host].inventory_hostname }} CPUs={{ hostvars[host].ansible_processor_vcpus | default(1) }} RealMemory={{ hostvars[host].ansible_memtotal_mb | default(1024) }} State=UNKNOWN
+{% endfor %}
+
+# Partition Definition using compute nodes only (adjust if you wish to include head nodes)
+PartitionName={{ slurm_partition_name | default("debug") }} Nodes={% for host in groups['compute'] %}{{ hostvars[host].inventory_hostname }}{% if not loop.last %},{% endif %}{% endfor %} Default=YES MaxTime=INFINITE State=UP

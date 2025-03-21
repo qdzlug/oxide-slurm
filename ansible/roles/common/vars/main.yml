@@ -1,9 +1,28 @@
 ---
 # Common Variables
-slurm_version: "22.05.9"
+slurm_version: "24.11.3"
 slurm_db_user: "slurm"
 slurm_db_pass: "SecurePass123"
 slurm_db_name: "slurm_acct_db"
+
+# SLURM Service and Cluster Variables
+slurm_cluster_name: "slurm_cluster"
+slurm_user: "slurm"              # SLURM service user
+slurmd_user: "root"              # User under which slurmd runs
+slurmctld_port: "6817"
+slurmd_port: "6818"
+slurmctld_logfile: "/var/log/slurmctld.log"
+slurmd_logfile: "/var/log/slurmd.log"
+slurmctld_pidfile: "/var/run/slurmctld.pid"
+slurmd_pidfile: "/var/run/slurmd.pid"
+state_save_location: "/var/spool/slurm/ctld"
+slurmd_spool_dir: "/var/spool/slurm/d"
+scheduler_type: "sched/backfill"
+select_type: "select/cons_tres"      # Updated for SLURM 24.11.3
+select_type_parameters: "CR_Core"
+return_to_service: "2"
+mpi_default: "none"                  # Use "none" if not using MPI
+task_plugin: "task/affinity"
 
 # Paths for Munge, Slurm configuration, build, package repo, and NFS share
 munge_key_path: "/etc/munge/munge.key"
@@ -12,8 +31,14 @@ slurm_build_path: "/tmp/slurm-build"
 slurm_package_repo: "/data/packages"
 slurm_nfs_share: "/data"
 slurm_nfs_mount: "/data"
-slurm_partition_name: "compute"
+slurm_partition_name: "debug"        # Partition name (adjust as needed)
 munge_nfs_path: "{{ slurm_nfs_share }}/munge"
 
 # Set the NFS server IP using the ansible_default_ipv4 address from the first head_node
 slurm_control_host: "{{ hostvars[groups['head_node'][0]].ansible_default_ipv4.address }}"
+
+# (Optional) Node-Specific Variables
+# If you prefer to generate node definitions dynamically via inventory facts, you can remove the static pattern.
+# slurm_node_pattern: "slurm-node-[1-4]"
+# slurm_node_cpus: "4"
+# slurm_node_memory: "16000"

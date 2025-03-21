@@ -179,7 +179,16 @@
     - inventory_hostname in groups['head_node']
 
 # Ensure slurmd and slurmctld are enabled and started on all nodes
-- name: Ensure slurmd and slurmctld services are enabled and started on all nodes
+- name: Ensure slurmd is enabled and started on all nodes
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - slurmd
+
+# Ensure slurmd and slurmctld are enabled and started on all nodes
+- name: Ensure slurmdbd and slurmctld services are enabled and started on the headnode
   systemd:
     name: "{{ item }}"
     state: started
@@ -187,6 +196,8 @@
   loop:
     - slurmd
     - slurmctld
+    - slurmdbd
+  when: inventory_hostname in groups['head_node']
 
 # Ensure slurmdbd is enabled and started on head node only
 - name: Ensure slurmdbd service is enabled and started on head node
