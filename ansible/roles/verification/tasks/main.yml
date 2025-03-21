@@ -96,7 +96,7 @@
 # Print SSH connection commands for all nodes (Demo)
 - name: Display SSH connection commands for all nodes in the cluster
   debug:
-    msg: "ssh -o StrictHostKeyChecking=no {{ hostvars[item].ansible_user }}@{{ hostvars[item].ansible_host }}  # {{ item }}"
+    msg: "{{ item }}: ssh -o StrictHostKeyChecking=no {{ hostvars[item].ansible_user }}@{{ hostvars[item].ansible_host }}"
   loop: "{{ groups['slurm_cluster'] }}"
   run_once: true
   delegate_to: localhost
