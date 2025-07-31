@@ -1,0 +1,22 @@
+---
+- name: Ensure flux is available in the path
+  shell: bash -lc "which flux"
+  register: flux_path
+  failed_when: flux_path.rc != 0
+  changed_when: false
+
+- name: Print flux binary path
+  debug:
+    msg: "Flux binary: {{ flux_path.stdout }}"
+
+- name: Start flux broker in background
+  shell: bash -lc "flux start --test-size=1 &> /tmp/flux-broker.log &"
+  when: inventory_hostname == "slurm-node-1"
+
+- name: Wait for flux broker to come up
+  wait_for:
+    host: 127.0.0.1
+    port: 8050
+    delay: 2
+    timeout: 30
+  when: inventory_hostname == "slurm-node-1"

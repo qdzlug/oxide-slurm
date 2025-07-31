@@ -1,0 +1,17 @@
+[Unit]
+Description=Flux Broker Service
+After=network.target
+
+[Service]
+Type=simple
+Environment=SPACK_ROOT=/opt/spack
+Environment=FLUX_CONF_DIR=/etc/flux
+Environment=FLUX_LOG_LEVEL=info
+ExecStart=/bin/bash -lc ". /opt/spack/share/spack/setup-env.sh && spack load gcc@13 && spack load flux-core && flux start"
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

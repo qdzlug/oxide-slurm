@@ -1,0 +1,215 @@
+- name: Check if this is the head node
+  ansible.builtin.command: hostname
+  register: hostname_result
+  changed_when: false
+
+- name: Set headnode fact
+  ansible.builtin.set_fact:
+    is_headnode: "{{ 'slurm-node-1' in hostname_result.stdout }}"
+
+- name: Check if flux stack archive already exists (head node only)
+  ansible.builtin.stat:
+    path: /data/packages/flux_stack.tar.gz
+  register: flux_archive
+  when: is_headnode
+
+- name: Install base build dependencies
+  ansible.builtin.apt:
+    name:
+      - git
+      - build-essential
+      - libhwloc-dev
+      - liblua5.3-dev
+      - libjson-c-dev
+      - libevent-dev
+      - python3
+      - python3-pip
+    update_cache: true
+
+- name: Remove existing Spack clone if present
+  ansible.builtin.file:
+    path: /opt/spack
+    state: absent
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Clone Spack
+  ansible.builtin.git:
+    repo: https://github.com/spack/spack.git
+    dest: /opt/spack
+    version: develop
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Overwrite Spack config.yaml with clean install_tree
+  ansible.builtin.copy:
+    dest: /opt/spack/etc/spack/defaults/config.yaml
+    content: |
+      config:
+        install_tree:
+          root: /opt/spack/store
+          projections:
+            all: '{architecture.platform}-{architecture.target}/{name}-{version}-{hash}'
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Remove legacy install path (/opt/spack/opt)
+  ansible.builtin.file:
+    path: /opt/spack/opt
+    state: absent
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Set up Spack shell init
+  ansible.builtin.copy:
+    dest: /etc/profile.d/spack.sh
+    content: |
+      . /opt/spack/share/spack/setup-env.sh
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Configure Spack mirrors
+  shell: |
+    . /opt/spack/share/spack/setup-env.sh
+    spack mirror remove backup || true
+    spack mirror add backup    https://spack-llnl-mirror.s3-us-west-2.amazonaws.com/
+    spack mirror add spack-public https://mirror.spack.io
+  args:
+    executable: /bin/bash
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Install GCC 13 with Spack
+  ansible.builtin.shell: |
+    . /opt/spack/share/spack/setup-env.sh
+    spack install gcc@13
+    spack load gcc@13
+    spack compiler find
+  args:
+    creates: /opt/spack/store/linux-*/gcc-*/gcc-13*
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Install PMIx
+  ansible.builtin.shell: |
+    . /opt/spack/share/spack/setup-env.sh
+    spack load gcc@13
+    spack install pmix
+  args:
+    creates: /opt/spack/store/linux-*/gcc-13*/pmix*
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Install OpenMPI
+  ansible.builtin.shell: |
+    . /opt/spack/share/spack/setup-env.sh
+    spack load gcc@13
+    spack install openmpi ^pmix
+  args:
+    creates: /opt/spack/store/linux-*/gcc-13*/openmpi*
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Install Flux Core
+  ansible.builtin.shell: |
+    . /opt/spack/share/spack/setup-env.sh
+    spack load gcc@13
+    spack install flux-core
+  args:
+    creates: /opt/spack/store/linux-*/gcc-13*/flux-core*
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Archive built packages
+  ansible.builtin.shell: |
+    tar -czf /data/packages/flux_stack.tar.gz -C / opt/spack etc/profile.d/flux.sh etc/flux
+  when: is_headnode and not flux_archive.stat.exists
+
+- name: Fail early if package archive not present
+  ansible.builtin.stat:
+    path: /data/packages/flux_stack.tar.gz
+  register: package_tarball
+  when: not is_headnode
+
+- name: Abort if flux_stack.tar.gz is missing
+  ansible.builtin.fail:
+    msg: "/data/packages/flux_stack.tar.gz does not exist. Did the head node build fail?"
+  when: not is_headnode and not package_tarball.stat.exists
+
+- name: Ensure base Spack directory exists on non-head nodes
+  ansible.builtin.file:
+    path: /opt/spack
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: not is_headnode
+
+- name: Ensure Spack store directory exists on non-head nodes
+  ansible.builtin.file:
+    path: /opt/spack/store
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: not is_headnode
+
+- name: Copy built stack from NFS
+  ansible.builtin.unarchive:
+    src: /data/packages/flux_stack.tar.gz
+    dest: /
+    remote_src: yes
+  when: not is_headnode
+
+- name: Ensure /etc/flux exists on all nodes
+  ansible.builtin.file:
+    path: /etc/flux
+    state: directory
+    mode: '0755'
+
+- name: Add Flux and MPI environment setup
+  ansible.builtin.copy:
+    dest: /etc/profile.d/flux.sh
+    content: |
+      . /opt/spack/share/spack/setup-env.sh
+      spack load gcc@13
+      spack load flux-core
+      spack load openmpi
+      export FLUX_CONF_DIR=/etc/flux
+      export FLUX_LOG_LEVEL=info
+
+- name: Ensure /run/flux exists
+  ansible.builtin.file:
+    path: /run/flux
+    state: directory
+    mode: '0755'
+
+- name: Create Flux config directory
+  ansible.builtin.file:
+    path: /etc/flux
+    state: directory
+    mode: '0755'
+
+- name: Install default Flux configuration
+  ansible.builtin.template:
+    src: flux-config.json.j2
+    dest: /etc/flux/config
+    mode: '0644'
+
+- name: Copy Flux systemd service unit
+  ansible.builtin.template:
+    src: flux-broker.service.j2
+    dest: /etc/systemd/system/flux-broker.service
+    mode: '0644'
+  when: is_headnode
+
+- name: Reload systemd to recognize flux-broker service
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  when: is_headnode
+
+- name: Enable and start flux-broker
+  ansible.builtin.systemd:
+    name: flux-broker
+    enabled: yes
+    state: started
+  when: is_headnode
+
+- name: Wait for flux broker socket to appear
+  ansible.builtin.wait_for:
+    path: /run/flux/local
+    timeout: 30
+  when: is_headnode
+
+
+
