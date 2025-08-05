@@ -27,6 +27,8 @@ resource "oxide_ssh_key" "slurm" {
 data "oxide_instance_external_ips" "slurm" {
   for_each    = oxide_instance.compute
   instance_id = each.value.id
+  
+  depends_on = [oxide_instance.compute]
 }
 
 # VPC for Slurm Cluster
@@ -72,8 +74,21 @@ resource "oxide_instance" "compute" {
   # Base64 encoding required for Oxide API
   user_data = base64encode(<<-EOF
 #!/bin/bash
+set -e
+
+# Wait for cloud-init to complete
+cloud-init status --wait
+
+# Configure sudo access
 echo "ubuntu ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ubuntu
 chmod 0440 /etc/sudoers.d/ubuntu
+
+# Ensure SSH is running and configured
+systemctl enable ssh
+systemctl start ssh
+
+# Signal completion
+touch /var/lib/cloud/instance/boot-finished
 EOF
   )
 
@@ -95,13 +110,36 @@ EOF
 
 resource "local_file" "ansible_inventory" {
   filename = "${path.root}/../ansible/inventory/hosts.ini"
-  content = templatefile("${path.root}/templates/hosts.ini.tpl", {
+  content = templatefile("./templates/hosts.ini.tpl", {
     headnode_ip = data.oxide_instance_external_ips.slurm["0"].external_ips[0].ip,
-    compute_ips = [for key, instance in data.oxide_instance_external_ips.slurm : instance.external_ips[0].ip if tonumber(key) > 0]
+    compute_nodes = [for i in range(1, var.instance_count) : {
+      name = "${var.instance_prefix}-${i + 1}"
+      ip   = data.oxide_instance_external_ips.slurm[tostring(i)].external_ips[0].ip
+    }]
   })
+}
+
+# Debug output - show instance IDs
+output "debug_instance_ids" {
+  value = {
+    for i in range(var.instance_count) :
+    "${var.instance_prefix}-${i + 1}" => oxide_instance.compute[tostring(i)].id
+  }
+}
+
+# Debug output - show all external IPs data
+output "debug_external_ips_raw" {
+  value = {
+    for i in range(var.instance_count) :
+    tostring(i) => data.oxide_instance_external_ips.slurm[tostring(i)]
+  }
+  sensitive = false
 }
 
 # Output External IPs of Instances
 output "slurm_node_ips" {
-  value = [for instance in data.oxide_instance_external_ips.slurm : instance.external_ips.0.ip]
+  value = {
+    for i in range(var.instance_count) : 
+    "${var.instance_prefix}-${i + 1}" => data.oxide_instance_external_ips.slurm[tostring(i)].external_ips[0].ip
+  }
 }

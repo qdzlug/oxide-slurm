@@ -1,0 +1,8 @@
+spack_user: spack
+spack_source_mirror: http://172.21.252.209:8080/mirror
+spack_binary_mirror: http://172.21.252.209:8080/binary-cache
+spack_packages:
+  - gcc
+  - openmpi
+  - pmix
+  - flux-core

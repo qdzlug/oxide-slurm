@@ -1,215 +1,438 @@
-- name: Check if this is the head node
-  ansible.builtin.command: hostname
-  register: hostname_result
-  changed_when: false
-
+---
+# Consolidated Flux role - combines build, broker, and node functionality
 - name: Set headnode fact
-  ansible.builtin.set_fact:
-    is_headnode: "{{ 'slurm-node-1' in hostname_result.stdout }}"
+  set_fact:
+    is_headnode: "{{ 'head_node' in group_names }}"
 
-- name: Check if flux stack archive already exists (head node only)
-  ansible.builtin.stat:
-    path: /data/packages/flux_stack.tar.gz
-  register: flux_archive
+# === BUILD PHASE (Head node only) ===
+- name: Build Flux stack on head node
   when: is_headnode
+  block:
+    - name: Check if flux stack archive already exists
+      ansible.builtin.stat:
+        path: /data/packages/flux_stack.tar.gz
+      register: flux_archive
 
-- name: Install base build dependencies
-  ansible.builtin.apt:
-    name:
-      - git
-      - build-essential
-      - libhwloc-dev
-      - liblua5.3-dev
-      - libjson-c-dev
-      - libevent-dev
-      - python3
-      - python3-pip
-    update_cache: true
+    - name: Install base build dependencies
+      ansible.builtin.apt:
+        name:
+          - git
+          - build-essential
+          - libhwloc-dev
+          - liblua5.3-dev
+          - libjson-c-dev
+          - libevent-dev
+          - python3
+          - python3-pip
+        update_cache: true
 
-- name: Remove existing Spack clone if present
-  ansible.builtin.file:
-    path: /opt/spack
-    state: absent
-  when: is_headnode and not flux_archive.stat.exists
+    - name: Build Flux from source
+      when: not flux_archive.stat.exists
+      block:
+        - name: Remove existing Spack clone if present
+          ansible.builtin.file:
+            path: /opt/spack
+            state: absent
 
-- name: Clone Spack
-  ansible.builtin.git:
-    repo: https://github.com/spack/spack.git
-    dest: /opt/spack
-    version: develop
-  when: is_headnode and not flux_archive.stat.exists
+        - name: Clone Spack
+          ansible.builtin.git:
+            repo: https://github.com/spack/spack.git
+            dest: /opt/spack
+            version: develop
 
-- name: Overwrite Spack config.yaml with clean install_tree
-  ansible.builtin.copy:
-    dest: /opt/spack/etc/spack/defaults/config.yaml
-    content: |
-      config:
-        install_tree:
-          root: /opt/spack/store
-          projections:
-            all: '{architecture.platform}-{architecture.target}/{name}-{version}-{hash}'
-  when: is_headnode and not flux_archive.stat.exists
+        - name: Overwrite Spack config.yaml with clean install_tree
+          ansible.builtin.copy:
+            dest: /opt/spack/etc/spack/defaults/config.yaml
+            content: |
+              config:
+                install_tree:
+                  root: /opt/spack/store
+                  projections:
+                    all: '{architecture.platform}-{architecture.target}/{name}-{version}-{hash}'
 
-- name: Remove legacy install path (/opt/spack/opt)
-  ansible.builtin.file:
-    path: /opt/spack/opt
-    state: absent
-  when: is_headnode and not flux_archive.stat.exists
+        - name: Remove legacy install path (/opt/spack/opt)
+          ansible.builtin.file:
+            path: /opt/spack/opt
+            state: absent
 
-- name: Set up Spack shell init
-  ansible.builtin.copy:
-    dest: /etc/profile.d/spack.sh
-    content: |
-      . /opt/spack/share/spack/setup-env.sh
-  when: is_headnode and not flux_archive.stat.exists
+        - name: Set up Spack shell init
+          ansible.builtin.copy:
+            dest: /etc/profile.d/spack.sh
+            content: |
+              . /opt/spack/share/spack/setup-env.sh
 
-- name: Configure Spack mirrors
+        - name: Add local source mirror to Spack
+          shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            if ! spack mirror list | grep -q '^local-source'; then
+              spack mirror add local-source {{ spack_source_mirror }}
+            fi
+          args:
+            executable: /bin/bash
+          when: is_headnode and not flux_archive.stat.exists
+
+        - name: Add local binary mirror to Spack
+          shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            if ! spack mirror list | grep -q '^local-binary'; then
+              spack mirror add local-binary {{ spack_binary_mirror }}
+            fi
+          args:
+            executable: /bin/bash
+          when: is_headnode and not flux_archive.stat.exists
+
+        - name: Ensure Spack public mirror is added
+          shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            if ! spack mirror list | grep -q '^spack-public'; then
+              spack mirror add spack-public https://mirror.spack.io
+            fi
+          args:
+            executable: /bin/bash
+          when: is_headnode and not flux_archive.stat.exists
+
+        - name: Ensure Spack backup mirror is added
+          shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            if ! spack mirror list | grep -q '^backup'; then
+              spack mirror add backup https://spack-llnl-mirror.s3-us-west-2.amazonaws.com/
+            fi
+          args:
+            executable: /bin/bash
+          when: is_headnode and not flux_archive.stat.exists
+
+        - name: Enable binary mirror installation preference
+          shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            spack config --scope site add config:install_tree:padded_length:128
+            spack buildcache keys --install --trust
+          args:
+            executable: /bin/bash
+          when: is_headnode and not flux_archive.stat.exists
+
+        - name: Install GCC with Spack
+          ansible.builtin.shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            spack install gcc
+            spack load gcc
+            spack compiler find
+          args:
+            creates: /opt/spack/store/linux-*/gcc-*/gcc-13*
+
+        - name: Install PMIx
+          ansible.builtin.shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            spack load gcc@13
+            spack install pmix
+          args:
+            creates: /opt/spack/store/linux-*/gcc-13*/pmix*
+
+        - name: Install OpenMPI
+          ansible.builtin.shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            spack load gcc
+            spack install openmpi ^pmix
+          args:
+            creates: /opt/spack/store/linux-*/gcc-13*/openmpi*
+
+        - name: Install Flux Core
+          ansible.builtin.shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            spack load gcc@13
+            spack install flux-core
+          args:
+            creates: /opt/spack/store/linux-*/gcc-13*/flux-core*
+
+        - name: Archive built packages
+          ansible.builtin.shell: |
+            tar -czf /data/packages/flux_stack.tar.gz -C / opt/spack etc/profile.d/flux.sh etc/flux
+
+    - name: Generate Flux cluster configuration files
+      block:
+        - name: Create /data/flux directory
+          file:
+            path: /data/flux
+            state: directory
+            owner: ubuntu
+            group: ubuntu
+            mode: '0755'
+
+        - name: Generate hosts.json
+          copy:
+            dest: /data/flux/hosts.json
+            content: |
+              [
+              {% for host in groups['all'] %}
+                { "host": "{{ host }}", "address": "{{ hostvars[host]['ansible_default_ipv4']['address'] }}" }{{ "," if not loop.last else "" }}
+              {% endfor %}
+              ]
+            mode: '0644'
+
+        - name: Generate resource.json
+          copy:
+            dest: /data/flux/resource.json
+            content: |
+              [
+              {% for host in groups['all'] %}
+                { "host": "{{ host }}", "cores": {{ hostvars[host]['ansible_processor_vcpus'] | default(2) }} }{{ "," if not loop.last else "" }}
+              {% endfor %}
+              ]
+            mode: '0644'
+
+# === INSTALLATION PHASE (All nodes) ===
+- name: Install Flux on compute nodes
+  when: not is_headnode
+  block:
+    - name: Fail early if package archive not present
+      ansible.builtin.stat:
+        path: /data/packages/flux_stack.tar.gz
+      register: package_tarball
+
+    - name: Abort if flux_stack.tar.gz is missing
+      ansible.builtin.fail:
+        msg: "/data/packages/flux_stack.tar.gz does not exist. Did the head node build fail?"
+      when: not package_tarball.stat.exists
+
+    - name: Ensure base Spack directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /opt/spack
+        - /opt/spack/store
+
+    - name: Copy built stack from NFS
+      ansible.builtin.unarchive:
+        src: /data/packages/flux_stack.tar.gz
+        dest: /
+        remote_src: yes
+
+# === CONFIGURATION PHASE (All nodes) ===
+- name: Configure Flux environment on all nodes
+  block:
+    - name: Ensure required directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/flux
+        - /run/flux
+
+    - name: Add Flux and MPI environment setup
+      ansible.builtin.copy:
+        dest: /etc/profile.d/flux.sh
+        content: |
+          . /opt/spack/share/spack/setup-env.sh
+          spack load gcc@13
+          spack load flux-core@v0.76.0
+          spack load openmpi
+          export FLUX_CONF_DIR=/etc/flux
+          export FLUX_LOG_LEVEL=info
+
+    - name: Install default Flux configuration
+      ansible.builtin.template:
+        src: flux-config.json.j2
+        dest: /etc/flux/config
+        mode: '0644'
+
+    - name: Copy Flux cluster configuration files
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: '0644'
+        remote_src: yes
+      loop:
+        - { src: /data/flux/hosts.json, dest: /etc/flux/hosts.json }
+        - { src: /data/flux/resource.json, dest: /etc/flux/resource.json }
+
+# === SSH SETUP (All nodes) ===
+- name: Configure SSH for Flux communication
+  block:
+    - name: Collect internal hostname and IP for each node
+      set_fact:
+        node_info: "{{ ansible_hostname }} {{ ansible_default_ipv4.address }}"
+
+    - name: Assemble list of internal host mappings
+      set_fact:
+        internal_hosts: "{{ internal_hosts | default([]) + [hostvars[item]['node_info']] }}"
+      with_items: "{{ groups['all'] }}"
+      run_once: true
+
+    - name: Write internal host IP mappings to /etc/hosts
+      blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED FLUX HOSTS"
+        block: |
+          {% for entry in internal_hosts %}
+          {{ entry.split(' ')[1] }} {{ entry.split(' ')[0] }}
+          {% endfor %}
+
+    - name: Ensure SSH keypair exists in shared /data (head node only)
+      when: is_headnode
+      command: ssh-keygen -t rsa -N "" -f "/data/flux_key"
+      args:
+        creates: "/data/flux_key"
+
+    - name: Create .ssh directory for ubuntu user
+      file:
+        path: /home/ubuntu/.ssh
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0700'
+
+    - name: Copy SSH keys to nodes
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: ubuntu
+        group: ubuntu
+        mode: "{{ item.mode }}"
+        remote_src: yes
+      loop:
+        - { src: /data/flux_key, dest: /home/ubuntu/.ssh/id_rsa, mode: '0600' }
+        - { src: /data/flux_key.pub, dest: /home/ubuntu/.ssh/id_rsa.pub, mode: '0644' }
+
+    - name: Add public key to authorized_keys
+      slurp:
+        src: "/data/flux_key.pub"
+      register: flux_pubkey
+
+    - name: Ensure public key is in authorized_keys
+      lineinfile:
+        path: /home/ubuntu/.ssh/authorized_keys
+        line: "{{ flux_pubkey.content | b64decode }}"
+        create: yes
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+
+    - name: Setup SSH known_hosts for cluster communication
+      when: is_headnode
+      block:
+        - name: Build list of internal IPs
+          set_fact:
+            flux_internal_ips: >-
+              {{ groups['all'] | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | list }}
+
+        - name: Collect SSH host keys from all nodes
+          command: ssh-keyscan -H {{ item }}
+          register: keyscan_results
+          loop: "{{ flux_internal_ips }}"
+          changed_when: false
+          failed_when: false
+
+        - name: Save known_hosts entries
+          copy:
+            content: |
+              {% for result in keyscan_results.results if result.rc == 0 %}
+              {{ result.stdout }}
+              {% endfor %}
+            dest: /data/flux/known_hosts_flux
+
+    - name: Distribute known_hosts file to all nodes
+      copy:
+        src: /data/flux/known_hosts_flux
+        dest: /home/ubuntu/.ssh/known_hosts
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+        remote_src: yes
+
+# === SERVICE SETUP ===
+- name: Setup Flux broker service (head node only)
+  when: is_headnode
+  block:
+    - name: Create flux-broker startup script
+      copy:
+        dest: /usr/local/bin/flux-broker-start.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -e
+          source /etc/profile.d/flux.sh
+          exec flux start --broker=local:// --listen=tcp://0.0.0.0:8050 --config /etc/flux/config
+
+    - name: Install flux-broker systemd service
+      copy:
+        dest: /etc/systemd/system/flux-broker.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Flux Broker Service
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/local/bin/flux-broker-start.sh
+          Restart=on-failure
+          User=root
+          WorkingDirectory=/root
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Enable and start flux-broker
+      ansible.builtin.systemd:
+        name: flux-broker
+        enabled: yes
+        state: started
+
+    - name: Wait for flux broker socket to appear
+      ansible.builtin.wait_for:
+        path: /run/flux/local
+        timeout: 30
+
+- name: Setup Flux node service (compute nodes only)
+  when: not is_headnode
+  block:
+    - name: Set headnode IP fact
+      set_fact:
+        headnode_ip: "{{ hostvars[groups['head_node'][0]]['ansible_default_ipv4']['address'] }}"
+
+    - name: Create systemd unit for Flux node
+      copy:
+        dest: /etc/systemd/system/flux.service
+        content: |
+          [Unit]
+          Description=Flux Node Service
+          After=network.target
+
+          [Service]
+          ExecStart=/bin/bash -c 'source /etc/profile.d/flux.sh && flux start --connect=tcp://{{ headnode_ip }}:8050'
+          Restart=on-failure
+          User=ubuntu
+          WorkingDirectory=/home/ubuntu
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start Flux node service
+      systemd:
+        name: flux
+        enabled: true
+        state: started
+
+- name: Run flux ping to validate connectivity (compute nodes only)
+  when: not is_headnode
   shell: |
-    . /opt/spack/share/spack/setup-env.sh
-    spack mirror remove backup || true
-    spack mirror add backup    https://spack-llnl-mirror.s3-us-west-2.amazonaws.com/
-    spack mirror add spack-public https://mirror.spack.io
-  args:
-    executable: /bin/bash
-  when: is_headnode and not flux_archive.stat.exists
-
-- name: Install GCC 13 with Spack
-  ansible.builtin.shell: |
-    . /opt/spack/share/spack/setup-env.sh
-    spack install gcc@13
-    spack load gcc@13
-    spack compiler find
-  args:
-    creates: /opt/spack/store/linux-*/gcc-*/gcc-13*
-  when: is_headnode and not flux_archive.stat.exists
-
-- name: Install PMIx
-  ansible.builtin.shell: |
-    . /opt/spack/share/spack/setup-env.sh
-    spack load gcc@13
-    spack install pmix
-  args:
-    creates: /opt/spack/store/linux-*/gcc-13*/pmix*
-  when: is_headnode and not flux_archive.stat.exists
-
-- name: Install OpenMPI
-  ansible.builtin.shell: |
-    . /opt/spack/share/spack/setup-env.sh
-    spack load gcc@13
-    spack install openmpi ^pmix
-  args:
-    creates: /opt/spack/store/linux-*/gcc-13*/openmpi*
-  when: is_headnode and not flux_archive.stat.exists
-
-- name: Install Flux Core
-  ansible.builtin.shell: |
-    . /opt/spack/share/spack/setup-env.sh
-    spack load gcc@13
-    spack install flux-core
-  args:
-    creates: /opt/spack/store/linux-*/gcc-13*/flux-core*
-  when: is_headnode and not flux_archive.stat.exists
-
-- name: Archive built packages
-  ansible.builtin.shell: |
-    tar -czf /data/packages/flux_stack.tar.gz -C / opt/spack etc/profile.d/flux.sh etc/flux
-  when: is_headnode and not flux_archive.stat.exists
-
-- name: Fail early if package archive not present
-  ansible.builtin.stat:
-    path: /data/packages/flux_stack.tar.gz
-  register: package_tarball
-  when: not is_headnode
-
-- name: Abort if flux_stack.tar.gz is missing
-  ansible.builtin.fail:
-    msg: "/data/packages/flux_stack.tar.gz does not exist. Did the head node build fail?"
-  when: not is_headnode and not package_tarball.stat.exists
-
-- name: Ensure base Spack directory exists on non-head nodes
-  ansible.builtin.file:
-    path: /opt/spack
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-  when: not is_headnode
-
-- name: Ensure Spack store directory exists on non-head nodes
-  ansible.builtin.file:
-    path: /opt/spack/store
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-  when: not is_headnode
-
-- name: Copy built stack from NFS
-  ansible.builtin.unarchive:
-    src: /data/packages/flux_stack.tar.gz
-    dest: /
-    remote_src: yes
-  when: not is_headnode
-
-- name: Ensure /etc/flux exists on all nodes
-  ansible.builtin.file:
-    path: /etc/flux
-    state: directory
-    mode: '0755'
-
-- name: Add Flux and MPI environment setup
-  ansible.builtin.copy:
-    dest: /etc/profile.d/flux.sh
-    content: |
-      . /opt/spack/share/spack/setup-env.sh
-      spack load gcc@13
-      spack load flux-core
-      spack load openmpi
-      export FLUX_CONF_DIR=/etc/flux
-      export FLUX_LOG_LEVEL=info
-
-- name: Ensure /run/flux exists
-  ansible.builtin.file:
-    path: /run/flux
-    state: directory
-    mode: '0755'
-
-- name: Create Flux config directory
-  ansible.builtin.file:
-    path: /etc/flux
-    state: directory
-    mode: '0755'
-
-- name: Install default Flux configuration
-  ansible.builtin.template:
-    src: flux-config.json.j2
-    dest: /etc/flux/config
-    mode: '0644'
-
-- name: Copy Flux systemd service unit
-  ansible.builtin.template:
-    src: flux-broker.service.j2
-    dest: /etc/systemd/system/flux-broker.service
-    mode: '0644'
-  when: is_headnode
-
-- name: Reload systemd to recognize flux-broker service
-  ansible.builtin.systemd:
-    daemon_reload: yes
-  when: is_headnode
-
-- name: Enable and start flux-broker
-  ansible.builtin.systemd:
-    name: flux-broker
-    enabled: yes
-    state: started
-  when: is_headnode
-
-- name: Wait for flux broker socket to appear
-  ansible.builtin.wait_for:
-    path: /run/flux/local
-    timeout: 30
-  when: is_headnode
-
-
-
+    . /etc/profile.d/flux.sh
+    flux ping
+  register: ping_result
+  failed_when: ping_result.rc != 0

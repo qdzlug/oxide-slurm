@@ -11,12 +11,12 @@ ansible_user   := $(shell grep '^ansible_user' terraform/terraform.tfvars | sed 
 VENV = .venv
 PYTHON = $(VENV)/bin/python3
 PIP = $(VENV)/bin/pip
-ANSIBLE_PLAYBOOK = $(VENV)/bin/ansible-playbook
-ANSIBLE_LINT = $(VENV)/bin/ansible-lint
-YAMLLINT = $(VENV)/bin/yamllint
+ANSIBLE_PLAYBOOK = $(CURDIR)/$(VENV)/bin/ansible-playbook
+ANSIBLE_LINT = $(CURDIR)/$(VENV)/bin/ansible-lint
+YAMLLINT = $(CURDIR)/$(VENV)/bin/yamllint
 TOFU = tofu
 
-.PHONY: help venv deps lint validate show-vars infra-up deploy destroy clean provision
+.PHONY: help venv deps lint validate show-vars infra-up deploy-slurm deploy-flux deploy destroy clean provision
 
 help:
 	@echo "Usage: make [target]"
@@ -27,8 +27,10 @@ help:
 	@echo "  validate        - Validate OpenTofu configuration"
 	@echo "  show-vars       - Display project variables from terraform.tfvars"
 	@echo "  infra-up        - Stand up infrastructure using OpenTofu and wait for nodes"
-	@echo "  deploy          - Deploy SLURM environment using Ansible"
-	@echo "  provision       - Shortcut for ansible-playbook against generated inventory"
+	@echo "  deploy          - Deploy SLURM cluster (default deployment)"
+	@echo "  deploy-slurm    - Deploy SLURM cluster using Ansible"
+	@echo "  deploy-flux     - Deploy Flux cluster using Ansible"
+	@echo "  provision       - Shortcut for SLURM deployment"
 	@echo "  destroy         - Tear down infrastructure using OpenTofu"
 	@echo "  lint            - Run linting tools on playbooks and Terraform"
 	@echo "  clean           - Remove virtual environment and Terraform caches"
@@ -61,12 +63,17 @@ infra-up:
 	done
 	@echo "All hosts are reachable."
 
-deploy:
-	@echo "Deploying SLURM environment with Ansible..."
-	$(ANSIBLE_PLAYBOOK) -i ansible/inventory/hosts.ini ansible/playbook.yml
+deploy-slurm:
+	@echo "Deploying SLURM cluster with Ansible..."
+	cd ansible && $(ANSIBLE_PLAYBOOK) -i inventory/hosts.ini playbooks/slurm-cluster.yml
 
-provision:
-	$(ANSIBLE_PLAYBOOK) -i ansible/inventory/hosts.ini ansible/playbook.yml
+deploy-flux:
+	@echo "Deploying Flux cluster with Ansible..."
+	cd ansible && $(ANSIBLE_PLAYBOOK) -i inventory/hosts.ini playbooks/flux-cluster.yml
+
+deploy: deploy-slurm
+
+provision: deploy-slurm
 
 destroy:
 	cd terraform && $(TOFU) destroy -auto-approve
