@@ -41,6 +41,7 @@
       - munge
       - libmunge2
       - nfs-common
+      - libhwloc15
     state: present
     update_cache: true
   when: inventory_hostname in groups['compute']
@@ -51,8 +52,8 @@
     path: /etc/hosts
     marker: "# {mark} ANSIBLE HOSTS BLOCK"
     block: |
-      {% for host in groups['all'] %}
-      {{ hostvars[host].ansible_default_ipv4.address }} {{ hostvars[host].inventory_hostname }}
+      {% for host in groups['slurm_cluster'] %}
+      {{ hostvars[host].ansible_host }} {{ hostvars[host].inventory_hostname }}
       {% endfor %}
 
 # User and Group Setup

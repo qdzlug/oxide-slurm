@@ -1,6 +1,10 @@
 ---
 - name: Setup Slurm Cluster with Local Configs and NFS for Package Distribution
-  hosts: all
+  hosts: slurm_cluster
   become: true
   roles:
-    - flux
+    - common
+    - nfs
+    - munge
+    - slurm
+    - verification

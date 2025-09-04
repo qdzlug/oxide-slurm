@@ -30,7 +30,7 @@ help:
 	@echo "  deploy          - Deploy SLURM cluster (default deployment)"
 	@echo "  deploy-slurm    - Deploy SLURM cluster using Ansible"
 	@echo "  deploy-flux     - Deploy Flux cluster using Ansible"
-	@echo "  provision       - Shortcut for SLURM deployment"
+	@echo "  provision       - Shortcut for SLURM deployment (alias for deploy)"
 	@echo "  destroy         - Tear down infrastructure using OpenTofu"
 	@echo "  lint            - Run linting tools on playbooks and Terraform"
 	@echo "  clean           - Remove virtual environment and Terraform caches"
@@ -65,11 +65,11 @@ infra-up:
 
 deploy-slurm:
 	@echo "Deploying SLURM cluster with Ansible..."
-	cd ansible && $(ANSIBLE_PLAYBOOK) -i inventory/hosts.ini playbooks/slurm-cluster.yml
+	$(ANSIBLE_PLAYBOOK) -i ansible/inventory/hosts.ini slurm-cluster.yml
 
 deploy-flux:
 	@echo "Deploying Flux cluster with Ansible..."
-	cd ansible && $(ANSIBLE_PLAYBOOK) -i inventory/hosts.ini playbooks/flux-cluster.yml
+	$(ANSIBLE_PLAYBOOK) -i ansible/inventory/hosts.ini flux-cluster.yml
 
 deploy: deploy-slurm
 

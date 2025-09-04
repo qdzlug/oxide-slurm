@@ -1,0 +1,35 @@
+# Oxide HPC Cluster Terraform Configuration Example
+# Copy this file to terraform.tfvars and update with your values
+
+# Oxide Rack Configuration
+oxide_token = "your-oxide-token-here"
+oxide_host  = "https://your-oxide-rack.local"
+
+# Project and VPC Configuration  
+project_name = "hpc-cluster"
+vpc_name     = "hpc-vpc"
+
+# Instance Configuration
+# Get available images with: oxide disk image list
+image_id     = "your-ubuntu-image-id-here"
+instance_type = "instance-type-name"  # e.g., "oxpop-m4-small"
+
+# Cluster Configuration
+cluster_name = "hpc-cluster"
+head_node_count = 1
+compute_node_count = 4  # Update this to match your setup.sh configuration
+
+# Network Configuration
+vpc_cidr = "10.0.0.0/16"
+subnet_cidr = "10.0.1.0/24"
+
+# Optional: Custom naming
+head_node_prefix = "cluster-head"
+compute_node_prefix = "cluster-node"
+
+# Optional: Disk configuration
+root_disk_size_gb = 50
+data_disk_size_gb = 100
+
+# SSH Key Configuration (if using custom keys)
+# ssh_public_key_file = "~/.ssh/id_rsa.pub"

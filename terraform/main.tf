@@ -4,7 +4,7 @@ terraform {
   required_providers {
     oxide = {
       source  = "oxidecomputer/oxide"
-      version = "0.5.0"
+      version = "0.13.0"
     }
   }
 }
@@ -27,8 +27,20 @@ resource "oxide_ssh_key" "slurm" {
 data "oxide_instance_external_ips" "slurm" {
   for_each    = oxide_instance.compute
   instance_id = each.value.id
-  
+
   depends_on = [oxide_instance.compute]
+}
+
+# Helper locals to filter ephemeral IPs
+locals {
+  # Function to get ephemeral IP from external_ips list
+  get_ephemeral_ip = {
+    for i in range(var.instance_count) :
+    tostring(i) => [
+      for ip_obj in data.oxide_instance_external_ips.slurm[tostring(i)].external_ips :
+      ip_obj.ip if ip_obj.kind == "ephemeral"
+    ][0] # Take the first (and should be only) ephemeral IP
+  }
 }
 
 # VPC for Slurm Cluster
@@ -108,13 +120,130 @@ EOF
   ]
 }
 
+# VPC Firewall Rules for Slurm
+resource "oxide_vpc_firewall_rules" "slurm_rules" {
+  vpc_id = oxide_vpc.slurm.id
+
+  rules = [
+    {
+      action      = "allow"
+      description = "Allow inbound SSH (port 22) from anywhere"
+      name        = "allow-ssh-22"
+      direction   = "inbound"
+      priority    = 60
+      status      = "enabled"
+      filters = {
+        hosts     = [{ type = "ip_net", value = "0.0.0.0/0" }]
+        ports     = ["22"]
+        protocols = [{ type = "tcp" }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    },
+    {
+      action      = "allow"
+      description = "Allow inbound ICMP (ping) from anywhere"
+      name        = "allow-icmp"
+      direction   = "inbound"
+      priority    = 70
+      status      = "enabled"
+      filters = {
+        hosts     = [{ type = "ip_net", value = "0.0.0.0/0" }]
+        protocols = [{ type = "icmp" }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    },
+    {
+      action      = "allow"
+      description = "Allow all inbound traffic from other instances within the VPC"
+      name        = "allow-internal-vpc"
+      direction   = "inbound"
+      priority    = 80
+      status      = "enabled"
+      filters = {
+        hosts = [{ type = "vpc", value = oxide_vpc.slurm.name }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    },
+    {
+      action      = "allow"
+      description = "Allow Slurm controller (slurmctld) port 6817"
+      name        = "allow-slurm-controller-6817"
+      direction   = "inbound"
+      priority    = 50
+      status      = "enabled"
+      filters = {
+        hosts     = [{ type = "ip_net", value = "172.21.252.0/24" }]
+        ports     = ["6817"]
+        protocols = [{ type = "tcp" }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    },
+    {
+      action      = "allow"
+      description = "Allow Slurm daemon (slurmd) port 6818"
+      name        = "allow-slurm-daemon-6818"
+      direction   = "inbound"
+      priority    = 51
+      status      = "enabled"
+      filters = {
+        hosts     = [{ type = "ip_net", value = "172.21.252.0/24" }]
+        ports     = ["6818"]
+        protocols = [{ type = "tcp" }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    },
+    {
+      action      = "allow"
+      description = "Allow HTTP (port 80) for package downloads"
+      name        = "allow-http-80"
+      direction   = "inbound"
+      priority    = 55
+      status      = "enabled"
+      filters = {
+        hosts     = [{ type = "ip_net", value = "0.0.0.0/0" }]
+        ports     = ["80"]
+        protocols = [{ type = "tcp" }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    },
+    {
+      action      = "allow"
+      description = "Allow HTTPS (port 443) for package downloads"
+      name        = "allow-https-443"
+      direction   = "inbound"
+      priority    = 56
+      status      = "enabled"
+      filters = {
+        hosts     = [{ type = "ip_net", value = "0.0.0.0/0" }]
+        ports     = ["443"]
+        protocols = [{ type = "tcp" }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    },
+    {
+      action      = "allow"
+      description = "Allow Spack mirror (port 8080) for package downloads"
+      name        = "allow-spack-mirror-8080"
+      direction   = "inbound"
+      priority    = 52
+      status      = "enabled"
+      filters = {
+        hosts     = [{ type = "ip_net", value = "0.0.0.0/0" }]
+        ports     = ["8080"]
+        protocols = [{ type = "tcp" }]
+      }
+      targets = [{ type = "subnet", value = data.oxide_vpc_subnet.slurm.name }]
+    }
+  ]
+}
+
 resource "local_file" "ansible_inventory" {
   filename = "${path.root}/../ansible/inventory/hosts.ini"
   content = templatefile("./templates/hosts.ini.tpl", {
-    headnode_ip = data.oxide_instance_external_ips.slurm["0"].external_ips[0].ip,
+    headnode_ip = local.get_ephemeral_ip["0"],
     compute_nodes = [for i in range(1, var.instance_count) : {
       name = "${var.instance_prefix}-${i + 1}"
-      ip   = data.oxide_instance_external_ips.slurm[tostring(i)].external_ips[0].ip
+      ip   = local.get_ephemeral_ip[tostring(i)]
     }]
   })
 }
@@ -136,10 +265,16 @@ output "debug_external_ips_raw" {
   sensitive = false
 }
 
-# Output External IPs of Instances
+# Debug output - show filtered ephemeral IPs only
+output "debug_ephemeral_ips_only" {
+  value       = local.get_ephemeral_ip
+  description = "Only the ephemeral IPs extracted from external_ips"
+}
+
+# Output External IPs of Instances (ephemeral only)
 output "slurm_node_ips" {
   value = {
-    for i in range(var.instance_count) : 
-    "${var.instance_prefix}-${i + 1}" => data.oxide_instance_external_ips.slurm[tostring(i)].external_ips[0].ip
+    for i in range(var.instance_count) :
+    "${var.instance_prefix}-${i + 1}" => local.get_ephemeral_ip[tostring(i)]
   }
 }

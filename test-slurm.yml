@@ -1,0 +1,291 @@
+---
+# Slurm Testing Playbook
+# This playbook validates a Slurm cluster deployment
+
+- name: Test Slurm Cluster Functionality
+  hosts: head_node
+  become: true
+  vars:
+    test_user: ubuntu
+    test_output_dir: /tmp/slurm-tests
+    
+  tasks:
+    - name: Create test output directory
+      file:
+        path: "{{ test_output_dir }}"
+        state: directory
+        owner: "{{ test_user }}"
+        group: "{{ test_user }}"
+        mode: '0755'
+
+    - name: Test 1 - Verify Slurm services are running
+      systemd:
+        name: "{{ item }}"
+        state: started
+      register: slurm_services
+      loop:
+        - slurmctld
+        - slurmdbd
+        - munge
+      failed_when: false
+
+    - name: Show Slurm service status
+      debug:
+        msg: "{{ item.name }}: {{ 'RUNNING' if item.status.ActiveState == 'active' else 'FAILED - ' + item.status.ActiveState }}"
+      loop: "{{ slurm_services.results }}"
+
+    - name: Test 2 - Check Slurm configuration
+      become_user: "{{ test_user }}"
+      shell: |
+        echo "=== Slurm Configuration Test ==="
+        echo "Slurm version:"
+        sinfo --version
+        echo
+        echo "Cluster info:"
+        scontrol show config | grep -E "ClusterName|SlurmUser|SlurmdUser"
+        echo
+        echo "Partition info:"
+        sinfo -o "%P %A %D %N"
+      register: slurm_config
+      
+    - name: Show Slurm configuration
+      debug:
+        var: slurm_config.stdout_lines
+
+    - name: Test 3 - Node status check
+      become_user: "{{ test_user }}"
+      shell: |
+        echo "=== Node Status Test ==="
+        sinfo -N -o "%N %T %O %C %G %m %d"
+        echo
+        echo "Detailed node info:"
+        scontrol show nodes | grep -E "NodeName|State|CPUTot|RealMemory"
+      register: node_status
+
+    - name: Show node status
+      debug:
+        var: node_status.stdout_lines
+
+    - name: Test 4 - Munge authentication test
+      become_user: "{{ test_user }}"
+      shell: |
+        echo "=== Munge Authentication Test ==="
+        echo "Munge service status:"
+        systemctl is-active munge
+        echo
+        echo "Munge encode/decode test:"
+        munge -n | unmunge
+        echo "Return code: $?"
+      register: munge_test
+
+    - name: Show Munge test results
+      debug:
+        var: munge_test.stdout_lines
+
+    - name: Test 5 - Simple job submission test
+      become_user: "{{ test_user }}"
+      shell: |
+        cd {{ test_output_dir }}
+        
+        echo "=== Simple Job Test ==="
+        echo "Submitting hostname job..."
+        JOBID=$(sbatch --parsable --wrap="hostname; date; sleep 2")
+        echo "Job ID: $JOBID"
+        
+        # Wait for job to complete
+        echo "Waiting for job completion..."
+        timeout 60s sh -c "while squeue -j $JOBID -h 2>/dev/null; do sleep 1; done"
+        
+        echo "Job status:"
+        sacct -j $JOBID --format=JobID,JobName,State,ExitCode,Start,End,Elapsed
+        
+        echo "Job output:"
+        if [ -f "slurm-${JOBID}.out" ]; then
+          cat "slurm-${JOBID}.out"
+        else
+          echo "Output file not found"
+        fi
+      register: simple_job
+
+    - name: Show simple job results
+      debug:
+        var: simple_job.stdout_lines
+
+    - name: Test 6 - Multi-node job test
+      become_user: "{{ test_user }}"
+      shell: |
+        cd {{ test_output_dir }}
+        
+        echo "=== Multi-node Job Test ==="
+        NODES=$(sinfo -h -o "%D" | head -1)
+        if [ "$NODES" -lt 2 ]; then
+          NODES=1
+          echo "Only 1 node available, testing single-node multi-task job"
+        else
+          echo "Testing multi-node job with $NODES nodes"
+        fi
+        
+        JOBID=$(sbatch --parsable --nodes=$NODES --ntasks-per-node=1 --wrap="echo 'Task on:'; hostname; echo 'Date:'; date")
+        echo "Multi-node job ID: $JOBID"
+        
+        # Wait for job completion
+        timeout 60s sh -c "while squeue -j $JOBID -h 2>/dev/null; do sleep 1; done"
+        
+        echo "Job accounting:"
+        sacct -j $JOBID --format=JobID,JobName,State,ExitCode,NNodes,NCPUs,Start,End
+        
+        echo "Multi-node job output:"
+        if [ -f "slurm-${JOBID}.out" ]; then
+          cat "slurm-${JOBID}.out"
+        else
+          echo "Output file not found"
+        fi
+      register: multinode_job
+
+    - name: Show multi-node job results
+      debug:
+        var: multinode_job.stdout_lines
+
+    - name: Test 7 - Array job test
+      become_user: "{{ test_user }}"
+      shell: |
+        cd {{ test_output_dir }}
+        
+        echo "=== Array Job Test ==="
+        JOBID=$(sbatch --parsable --array=1-3 --wrap="echo 'Array task'; echo 'Task ID:' \$SLURM_ARRAY_TASK_ID; echo 'Host:'; hostname")
+        echo "Array job ID: $JOBID"
+        
+        # Wait for array jobs to complete
+        timeout 90s sh -c "while squeue -j $JOBID -h 2>/dev/null; do sleep 2; done"
+        
+        echo "Array job accounting:"
+        sacct -j $JOBID --format=JobID,JobName,State,ExitCode,Start,End
+        
+        echo "Array job outputs:"
+        for i in 1 2 3; do
+          echo "--- Task $i ---"
+          if [ -f "slurm-${JOBID}_${i}.out" ]; then
+            cat "slurm-${JOBID}_${i}.out"
+          else
+            echo "Output file slurm-${JOBID}_${i}.out not found"
+          fi
+        done
+      register: array_job
+
+    - name: Show array job results
+      debug:
+        var: array_job.stdout_lines
+
+    - name: Test 8 - Resource limits test
+      become_user: "{{ test_user }}"
+      shell: |
+        cd {{ test_output_dir }}
+        
+        echo "=== Resource Limits Test ==="
+        echo "Testing memory and CPU constraints..."
+        
+        JOBID=$(sbatch --parsable --mem=100M --cpus-per-task=1 --time=00:01:00 --wrap="echo 'Memory limit test'; free -m; echo 'CPU info:'; nproc")
+        echo "Resource test job ID: $JOBID"
+        
+        # Wait for job completion
+        timeout 90s sh -c "while squeue -j $JOBID -h 2>/dev/null; do sleep 2; done"
+        
+        echo "Resource job accounting:"
+        sacct -j $JOBID --format=JobID,State,ExitCode,ReqMem,ReqCPUS,MaxRSS,Start,End
+        
+        echo "Resource job output:"
+        if [ -f "slurm-${JOBID}.out" ]; then
+          cat "slurm-${JOBID}.out"
+        else
+          echo "Output file not found"
+        fi
+      register: resource_test
+
+    - name: Show resource test results
+      debug:
+        var: resource_test.stdout_lines
+
+    - name: Test 9 - Job dependencies test
+      become_user: "{{ test_user }}"
+      shell: |
+        cd {{ test_output_dir }}
+        
+        echo "=== Job Dependencies Test ==="
+        
+        # Submit first job
+        JOB1=$(sbatch --parsable --wrap="echo 'First job'; sleep 5; echo 'First job done'")
+        echo "First job ID: $JOB1"
+        
+        # Submit dependent job
+        JOB2=$(sbatch --parsable --dependency=afterok:$JOB1 --wrap="echo 'Dependent job'; echo 'Previous job was: $JOB1'")
+        echo "Dependent job ID: $JOB2"
+        
+        echo "Job queue with dependencies:"
+        squeue --format="%.10i %.15P %.20j %.8u %.8T %.10M %.6D %R"
+        
+        # Wait for both jobs to complete
+        echo "Waiting for jobs to complete..."
+        timeout 120s sh -c "while squeue -j $JOB1,$JOB2 -h 2>/dev/null; do sleep 2; done"
+        
+        echo "Dependency test accounting:"
+        sacct -j $JOB1,$JOB2 --format=JobID,JobName,State,ExitCode,Start,End,Elapsed
+      register: dependency_test
+
+    - name: Show dependency test results
+      debug:
+        var: dependency_test.stdout_lines
+
+    - name: Test 10 - Slurm accounting test
+      become_user: "{{ test_user }}"
+      shell: |
+        echo "=== Slurm Accounting Test ==="
+        echo "Recent job history:"
+        sacct --starttime=today --format=JobID,JobName,User,State,ExitCode,Start,End,Elapsed,NNodes,NCPUs --noheader | tail -10
+        
+        echo
+        echo "Cluster usage summary:"
+        sreport cluster utilization start=today --tres=cpu,mem --noheader | head -5
+        
+        echo
+        echo "User summary:"
+        sreport user top start=today --tres=cpu --noheader | head -5
+      register: accounting_test
+
+    - name: Show accounting test results
+      debug:
+        var: accounting_test.stdout_lines
+
+    - name: Generate Slurm test summary
+      become_user: "{{ test_user }}"
+      shell: |
+        cd {{ test_output_dir }}
+        echo "=== SLURM CLUSTER TEST SUMMARY ==="
+        echo "Test run date: $(date)"
+        echo "Cluster name: $(scontrol show config | grep ClusterName | cut -d= -f2 | tr -d ' ')"
+        echo "Slurm version: $(sinfo --version)"
+        echo 
+        echo "Service Status:"
+        systemctl is-active slurmctld && echo "  ✓ slurmctld: RUNNING" || echo "  ✗ slurmctld: FAILED"
+        systemctl is-active slurmdbd && echo "  ✓ slurmdbd: RUNNING" || echo "  ✗ slurmdbd: FAILED" 
+        systemctl is-active munge && echo "  ✓ munge: RUNNING" || echo "  ✗ munge: FAILED"
+        echo
+        echo "Node Status:"
+        sinfo -h -o "%D nodes %T" | while read line; do echo "  $line"; done
+        echo
+        echo "Available Resources:"
+        sinfo -h -o "%P: %C cores, %D nodes" | while read line; do echo "  $line"; done
+        echo
+        echo "Recent Jobs:"
+        sacct --starttime=today --format=JobID,State,ExitCode --noheader | tail -5 | while read line; do echo "  $line"; done
+        echo
+        echo "=== ALL SLURM TESTS COMPLETED ==="
+      register: test_summary
+
+    - name: Show final test summary
+      debug:
+        var: test_summary.stdout_lines
+
+    - name: Clean up test files
+      file:
+        path: "{{ test_output_dir }}"
+        state: absent

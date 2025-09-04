@@ -138,7 +138,6 @@
   ansible.builtin.copy:
     dest: "{{ slurm_config_path }}/cgroup.conf"
     content: |
-      CgroupAutomount=yes
       ConstrainCores=yes
       ConstrainRAMSpace=yes
       ConstrainSwapSpace=yes

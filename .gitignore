@@ -22,7 +22,18 @@ host_vars/*.vault.yml
 *.vault-pass
 ansible.log
 
+# Generated inventory files
+ansible/inventory/hosts.ini
+
+# Cluster configuration
+.cluster-config
+
+# Backup files
+*.backup
+*.bak
+
 # Python Virtual Environment (if used for Ansible)
+.venv/
 venv/
 __pycache__/
 *.pyc

@@ -61,25 +61,49 @@
             content: |
               . /opt/spack/share/spack/setup-env.sh
 
-        - name: Add local source mirror to Spack
-          shell: |
-            . /opt/spack/share/spack/setup-env.sh
-            if ! spack mirror list | grep -q '^local-source'; then
-              spack mirror add local-source {{ spack_source_mirror }}
-            fi
-          args:
-            executable: /bin/bash
-          when: is_headnode and not flux_archive.stat.exists
+        - name: Debug - Show all variables
+          debug:
+            msg: 
+              - "spack_source_mirror: {{ spack_source_mirror | default('UNDEFINED') }}"
+              - "spack_binary_mirror: {{ spack_binary_mirror | default('UNDEFINED') }}"
+              - "spack_user: {{ spack_user | default('UNDEFINED') }}"
+              - "Working directory: {{ ansible_env.PWD | default('unknown') }}"
+              - "Group vars file should be at: ./group_vars/all.yml"
 
-        - name: Add local binary mirror to Spack
+        - name: Set spack mirror variables explicitly
+          set_fact:
+            local_spack_source_mirror: "{{ spack_source_mirror | default('') }}"
+            local_spack_binary_mirror: "{{ spack_binary_mirror | default('') }}"
+
+        - name: Debug mirror variables
+          debug:
+            msg:
+              - "Source mirror: {{ local_spack_source_mirror }}"  
+              - "Binary mirror: {{ local_spack_binary_mirror }}"
+
+        - name: Add local binary mirror to Spack (if configured)
           shell: |
             . /opt/spack/share/spack/setup-env.sh
             if ! spack mirror list | grep -q '^local-binary'; then
-              spack mirror add local-binary {{ spack_binary_mirror }}
+              echo "Adding local binary mirror: {{ local_spack_binary_mirror }}"
+              spack mirror add local-binary {{ local_spack_binary_mirror }}
+            fi
+            echo "Trusting binary cache keys..."
+            spack buildcache keys --install --trust
+          args:
+            executable: /bin/bash
+          when: local_spack_binary_mirror != ""
+
+        - name: Add local source mirror to Spack (if configured)
+          shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            if ! spack mirror list | grep -q '^local-source'; then
+              echo "Adding local source mirror: {{ local_spack_source_mirror }}"
+              spack mirror add local-source {{ local_spack_source_mirror }}
             fi
           args:
             executable: /bin/bash
-          when: is_headnode and not flux_archive.stat.exists
+          when: local_spack_source_mirror != ""
 
         - name: Ensure Spack public mirror is added
           shell: |
@@ -89,7 +113,6 @@
             fi
           args:
             executable: /bin/bash
-          when: is_headnode and not flux_archive.stat.exists
 
         - name: Ensure Spack backup mirror is added
           shell: |
@@ -99,7 +122,6 @@
             fi
           args:
             executable: /bin/bash
-          when: is_headnode and not flux_archive.stat.exists
 
         - name: Enable binary mirror installation preference
           shell: |
@@ -108,44 +130,105 @@
             spack buildcache keys --install --trust
           args:
             executable: /bin/bash
-          when: is_headnode and not flux_archive.stat.exists
 
-        - name: Install GCC with Spack
+        - name: Verify mirror configuration
+          shell: |
+            . /opt/spack/share/spack/setup-env.sh
+            echo "=== Configured Mirrors ==="
+            spack mirror list
+            echo ""
+            echo "=== Binary cache keys ==="
+            spack buildcache keys
+            echo ""
+            echo "=== Available binaries for flux-core ==="
+            spack buildcache list flux-core || echo "No flux-core binaries found"
+            echo ""
+            echo "=== Test connectivity to local binary mirror ==="
+            curl -s {{ local_spack_binary_mirror }} | head -3 || echo "Cannot connect to local mirror"
+          args:
+            executable: /bin/bash
+          register: mirror_verification
+          failed_when: false
+          when: local_spack_binary_mirror != ""
+
+        - name: Show mirror verification results
+          debug:
+            msg: "{{ mirror_verification.stdout_lines }}"
+          when: mirror_verification is defined and mirror_verification.stdout_lines is defined
+
+        - name: Configure system GCC as Spack compiler
           ansible.builtin.shell: |
             . /opt/spack/share/spack/setup-env.sh
-            spack install gcc
-            spack load gcc
+            echo "=== Using system GCC and configuring Spack compilers ==="
             spack compiler find
-          args:
-            creates: /opt/spack/store/linux-*/gcc-*/gcc-13*
+            spack compiler list
+            echo "=== GCC configuration completed ==="
+          register: gcc_config_result
 
-        - name: Install PMIx
+        - name: Show GCC configuration details
+          debug:
+            msg: "{{ gcc_config_result.stdout_lines }}"
+
+        - name: Install packages from binary cache (PMIx, OpenMPI, Flux Core)
           ansible.builtin.shell: |
             . /opt/spack/share/spack/setup-env.sh
-            spack load gcc@13
-            spack install pmix
+            echo "=== Installing packages from binary cache ==="
+            
+            # Try binary-only installation first for speed
+            echo "Attempting binary-only install of pmix..."
+            if ! spack install --cache-only pmix; then
+              echo "Binary install failed, falling back to source build for pmix..."
+              spack install pmix
+            fi
+            
+            echo "Attempting binary-only install of openmpi..."
+            if ! spack install --cache-only openmpi; then
+              echo "Binary install failed, falling back to source build for openmpi..."
+              spack install openmpi
+            fi
+            
+            echo "Attempting binary-only install of flux-core..."
+            if ! spack install --cache-only flux-core; then
+              echo "Binary install failed, falling back to source build for flux-core..."
+              spack install flux-core
+            fi
+            
+            echo "=== Package installation completed ==="
+            echo "Installed packages:"
+            spack find
           args:
-            creates: /opt/spack/store/linux-*/gcc-13*/pmix*
+            executable: /bin/bash
+          register: packages_install_result
 
-        - name: Install OpenMPI
-          ansible.builtin.shell: |
-            . /opt/spack/share/spack/setup-env.sh
-            spack load gcc
-            spack install openmpi ^pmix
-          args:
-            creates: /opt/spack/store/linux-*/gcc-13*/openmpi*
+        - name: Show package installation details
+          debug:
+            msg: "{{ packages_install_result.stdout_lines }}"
 
-        - name: Install Flux Core
-          ansible.builtin.shell: |
-            . /opt/spack/share/spack/setup-env.sh
-            spack load gcc@13
-            spack install flux-core
-          args:
-            creates: /opt/spack/store/linux-*/gcc-13*/flux-core*
+        - name: Ensure /data/packages directory exists
+          ansible.builtin.file:
+            path: /data/packages
+            state: directory
+            mode: '0755'
 
-        - name: Archive built packages
-          ansible.builtin.shell: |
-            tar -czf /data/packages/flux_stack.tar.gz -C / opt/spack etc/profile.d/flux.sh etc/flux
+        - name: Create Flux stack archive immediately after installation
+          shell: |
+            echo "Creating Flux stack archive..."
+            # Ensure the archive directory exists and is accessible
+            mkdir -p /data/packages
+            chmod 755 /data/packages
+            
+            # Create archive of Spack installation
+            if [ -d /opt/spack ]; then
+              tar -czf /data/packages/flux_stack.tar.gz -C / opt/spack \
+                $(test -f /etc/profile.d/flux.sh && echo etc/profile.d/flux.sh || true) \
+                $(test -f /etc/profile.d/spack.sh && echo etc/profile.d/spack.sh || true) || true
+              echo "Archive created at /data/packages/flux_stack.tar.gz"
+              ls -la /data/packages/flux_stack.tar.gz
+            else
+              echo "ERROR: /opt/spack directory not found"
+              exit 1
+            fi
+          register: early_archive_result
 
     - name: Generate Flux cluster configuration files
       block:
@@ -163,7 +246,7 @@
             content: |
               [
               {% for host in groups['all'] %}
-                { "host": "{{ host }}", "address": "{{ hostvars[host]['ansible_default_ipv4']['address'] }}" }{{ "," if not loop.last else "" }}
+                { "host": "{{ host }}", "address": "{{ hostvars[host]['ansible_host'] }}" }{{ "," if not loop.last else "" }}
               {% endfor %}
               ]
             mode: '0644'
@@ -222,22 +305,79 @@
         - /etc/flux
         - /run/flux
 
+    - name: Set spack mirror variables for all nodes
+      set_fact:
+        local_spack_source_mirror: "{{ spack_source_mirror | default('') }}"
+        local_spack_binary_mirror: "{{ spack_binary_mirror | default('') }}"
+
+    - name: Configure Spack mirrors on all nodes
+      shell: |
+        . /opt/spack/share/spack/setup-env.sh
+        
+        # Add local binary mirror (if configured)
+        if [[ -n "{{ local_spack_binary_mirror }}" ]]; then
+          if ! spack mirror list | grep -q '^local-binary'; then
+            echo "Adding local binary mirror: {{ local_spack_binary_mirror }}"
+            spack mirror add local-binary {{ local_spack_binary_mirror }}
+          fi
+          echo "Trusting binary cache keys..."
+          spack buildcache keys --install --trust
+        fi
+        
+        # Add local source mirror (if configured)
+        if [[ -n "{{ local_spack_source_mirror }}" ]]; then
+          if ! spack mirror list | grep -q '^local-source'; then
+            echo "Adding local source mirror: {{ local_spack_source_mirror }}"
+            spack mirror add local-source {{ local_spack_source_mirror }}
+          fi
+        fi
+        
+        # Ensure Spack public mirror is added
+        if ! spack mirror list | grep -q '^spack-public'; then
+          spack mirror add spack-public https://mirror.spack.io
+        fi
+        
+        # Ensure Spack backup mirror is added
+        if ! spack mirror list | grep -q '^backup'; then
+          spack mirror add backup https://spack-llnl-mirror.s3-us-west-2.amazonaws.com/
+        fi
+        
+        echo "=== Configured Mirrors ==="
+        spack mirror list
+      args:
+        executable: /bin/bash
+      register: mirror_config_result
+      when: local_spack_binary_mirror != "" or local_spack_source_mirror != ""
+
+    - name: Show mirror configuration results
+      debug:
+        msg: "{{ mirror_config_result.stdout_lines }}"
+      when: mirror_config_result is defined and mirror_config_result.stdout_lines is defined
+
     - name: Add Flux and MPI environment setup
       ansible.builtin.copy:
         dest: /etc/profile.d/flux.sh
         content: |
           . /opt/spack/share/spack/setup-env.sh
           spack load gcc@13
-          spack load flux-core@v0.76.0
+          spack load flux-core
           spack load openmpi
           export FLUX_CONF_DIR=/etc/flux
           export FLUX_LOG_LEVEL=info
 
-    - name: Install default Flux configuration
-      ansible.builtin.template:
-        src: flux-config.json.j2
-        dest: /etc/flux/config
+    - name: Create simple Flux configuration (TOML format)
+      copy:
+        dest: /etc/flux/system.toml
         mode: '0644'
+        content: |
+          [bootstrap]
+          default_port = 8050
+          
+          [resource]
+          path = "/etc/flux/R"
+          
+          [exec]
+          systemd-user = true
 
     - name: Copy Flux cluster configuration files
       copy:
@@ -256,11 +396,11 @@
   block:
     - name: Collect internal hostname and IP for each node
       set_fact:
-        node_info: "{{ ansible_hostname }} {{ ansible_default_ipv4.address }}"
+        node_info: "{{ inventory_hostname }} {{ ansible_host }}"
 
     - name: Assemble list of internal host mappings
       set_fact:
-        internal_hosts: "{{ internal_hosts | default([]) + [hostvars[item]['node_info']] }}"
+        internal_hosts: "{{ internal_hosts | default([]) + [item + ' ' + hostvars[item]['ansible_host']] }}"
       with_items: "{{ groups['all'] }}"
       run_once: true
 
@@ -319,7 +459,7 @@
         - name: Build list of internal IPs
           set_fact:
             flux_internal_ips: >-
-              {{ groups['all'] | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | list }}
+              {{ groups['all'] | map('extract', hostvars, ['ansible_host']) | list }}
 
         - name: Collect SSH host keys from all nodes
           command: ssh-keyscan -H {{ item }}
@@ -345,94 +485,366 @@
         mode: '0644'
         remote_src: yes
 
-# === SERVICE SETUP ===
-- name: Setup Flux broker service (head node only)
-  when: is_headnode
+# === SLURM INTEGRATION SETUP ===
+- name: Setup Flux-Slurm Integration (all nodes)
   block:
-    - name: Create flux-broker startup script
+    - name: Create flux integration directory
+      file:
+        path: /opt/flux-slurm
+        state: directory
+        mode: '0755'
+
+    - name: Copy Slurm-Flux integration job templates
       copy:
-        dest: /usr/local/bin/flux-broker-start.sh
+        dest: "{{ item.dest }}"
+        content: "{{ item.content }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - dest: /opt/flux-slurm/flux-slurm-job.sh
+          mode: '0755'
+          content: |
+            #!/bin/bash
+            #SBATCH --job-name=flux-instance
+            #SBATCH --nodes=4
+            #SBATCH --ntasks-per-node=1
+            #SBATCH --cpus-per-task=2
+            #SBATCH --time=01:00:00
+            #SBATCH --partition=debug
+
+            # Slurm-Flux Integration Job Script
+            # This script starts a distributed Flux instance across Slurm-allocated nodes
+
+            set -e
+
+            # Source Flux environment
+            source /etc/profile.d/flux.sh
+
+            # Create temporary directory for this Flux instance
+            export FLUX_TMPDIR=$(mktemp -d /tmp/flux-${SLURM_JOB_ID}-XXXXX)
+            export FLUX_RC_EXTRA="$FLUX_TMPDIR/rc"
+            mkdir -p $FLUX_RC_EXTRA
+
+            # Generate resource configuration for allocated nodes
+            echo "Generating Flux resource configuration for ${SLURM_NNODES} nodes..."
+            NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ',' | sed 's/,$//')
+            flux R encode --hosts="$NODELIST" --cores=0-1 > $FLUX_TMPDIR/R
+
+            echo "Allocated nodes: $NODELIST"
+            echo "Starting Flux instance with job ID: $SLURM_JOB_ID"
+
+            # Start Flux across allocated nodes using srun
+            # This creates a distributed Flux instance within the Slurm allocation
+            exec srun --mpi=none flux start -o,-Slog-filename=$FLUX_TMPDIR/flux.log -o,-Slog-level=6 \
+                --setattr=resource.R="$FLUX_TMPDIR/R" \
+                --setattr=statedir="$FLUX_TMPDIR" \
+                $@
+
+        - dest: /opt/flux-slurm/flux-interactive.sh
+          mode: '0755'
+          content: |
+            #!/bin/bash
+            #SBATCH --job-name=flux-interactive
+            #SBATCH --nodes=2
+            #SBATCH --ntasks-per-node=1  
+            #SBATCH --cpus-per-task=2
+            #SBATCH --time=01:00:00
+            #SBATCH --partition=debug
+
+            # Interactive Flux Session via Slurm
+            # Submit with: sbatch --pty flux-interactive.sh
+
+            source /etc/profile.d/flux.sh
+
+            export FLUX_TMPDIR=$(mktemp -d /tmp/flux-${SLURM_JOB_ID}-XXXXX)
+            mkdir -p $FLUX_TMPDIR
+
+            # Generate resource config
+            NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ',' | sed 's/,$//')
+            flux R encode --hosts="$NODELIST" --cores=0-1 > $FLUX_TMPDIR/R
+
+            echo "=== Flux Interactive Session ==="
+            echo "Job ID: $SLURM_JOB_ID"
+            echo "Nodes: $NODELIST"
+            echo "Flux tmpdir: $FLUX_TMPDIR"
+            echo "================================"
+
+            # Start interactive Flux session
+            exec srun --mpi=none flux start -o,-Slog-filename=$FLUX_TMPDIR/flux.log \
+                --setattr=resource.R="$FLUX_TMPDIR/R" \
+                --setattr=statedir="$FLUX_TMPDIR" \
+                /bin/bash
+
+        - dest: /opt/flux-slurm/flux-job-example.sh
+          mode: '0755'
+          content: |
+            #!/bin/bash
+            #SBATCH --job-name=flux-workload
+            #SBATCH --nodes=3
+            #SBATCH --ntasks-per-node=1
+            #SBATCH --cpus-per-task=2
+            #SBATCH --time=00:30:00
+            #SBATCH --partition=debug
+
+            # Example: Run a parallel workload using Flux within Slurm allocation
+
+            source /etc/profile.d/flux.sh
+
+            export FLUX_TMPDIR=$(mktemp -d /tmp/flux-${SLURM_JOB_ID}-XXXXX)
+            mkdir -p $FLUX_TMPDIR
+
+            # Generate resource config for Slurm allocation
+            NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ',' | sed 's/,$//')
+            flux R encode --hosts="$NODELIST" --cores=0-1 > $FLUX_TMPDIR/R
+
+            echo "Starting Flux workload across $SLURM_NNODES nodes: $NODELIST"
+
+            # Start Flux and submit a batch of jobs
+            srun --mpi=none flux start \
+                --setattr=resource.R="$FLUX_TMPDIR/R" \
+                --setattr=statedir="$FLUX_TMPDIR" \
+                bash -c "
+                # Submit multiple parallel jobs within Flux
+                for i in {1..10}; do
+                    flux submit --cc=1-2 hostname
+                done
+                
+                # Wait for all jobs to complete
+                flux queue drain
+                
+                # Show job status
+                flux jobs -a
+                
+                echo 'All Flux jobs completed within Slurm allocation'
+            "
+
+            echo "Flux workload completed"
+
+    - name: Install flux-submit helper script
+      copy:
+        dest: /usr/local/bin/flux-submit
         mode: '0755'
         content: |
           #!/bin/bash
+          # Flux-Slurm Integration Helper Script
+          # This script helps users submit Flux jobs via Slurm
+
           set -e
+
+          usage() {
+              cat << EOF
+          Usage: $0 [OPTIONS] -- [FLUX_COMMAND...]
+
+          Submit a Flux instance via Slurm for distributed workload management.
+
+          OPTIONS:
+              -n, --nodes N        Number of nodes to allocate (default: 2)
+              -t, --time TIME      Time limit (default: 01:00:00) 
+              -p, --partition P    Slurm partition (default: debug)
+              -j, --job-name NAME  Job name (default: flux-job)
+              -i, --interactive    Start interactive Flux session
+              -h, --help          Show this help
+
+          EXAMPLES:
+              # Interactive 2-node Flux session
+              $0 --interactive --nodes 2
+              
+              # Submit Flux batch job
+              $0 --nodes 4 --time 00:30:00 -- flux submit --cc=1-8 hostname
+              
+              # Run specific flux script
+              $0 --nodes 3 -- /path/to/my-flux-script.sh
+
+          NOTES:
+              - Flux runs within Slurm job allocation
+              - All nodes in allocation participate in Flux instance
+              - Use 'flux submit' within the session to submit jobs to Flux
+          EOF
+          }
+
+          # Default values
+          NODES=2
+          TIME="01:00:00"
+          PARTITION="debug"
+          JOB_NAME="flux-job"
+          INTERACTIVE=false
+          FLUX_CMD=""
+
+          # Parse arguments
+          while [[ $# -gt 0 ]]; do
+              case $1 in
+                  -n|--nodes)
+                      NODES="$2"
+                      shift 2
+                      ;;
+                  -t|--time)
+                      TIME="$2"
+                      shift 2
+                      ;;
+                  -p|--partition)
+                      PARTITION="$2"
+                      shift 2
+                      ;;
+                  -j|--job-name)
+                      JOB_NAME="$2"
+                      shift 2
+                      ;;
+                  -i|--interactive)
+                      INTERACTIVE=true
+                      shift
+                      ;;
+                  -h|--help)
+                      usage
+                      exit 0
+                      ;;
+                  --)
+                      shift
+                      FLUX_CMD="$*"
+                      break
+                      ;;
+                  *)
+                      echo "Unknown option: $1"
+                      usage
+                      exit 1
+                      ;;
+              esac
+          done
+
+          # Create temporary job script
+          TMPSCRIPT=$(mktemp /tmp/flux-slurm-XXXXX.sh)
+          trap "rm -f $TMPSCRIPT" EXIT
+
+          cat > $TMPSCRIPT << EOF
+          #!/bin/bash
+          #SBATCH --job-name=$JOB_NAME
+          #SBATCH --nodes=$NODES
+          #SBATCH --ntasks-per-node=1
+          #SBATCH --cpus-per-task=2
+          #SBATCH --time=$TIME
+          #SBATCH --partition=$PARTITION
+
           source /etc/profile.d/flux.sh
-          exec flux start --broker=local:// --listen=tcp://0.0.0.0:8050 --config /etc/flux/config
 
-    - name: Install flux-broker systemd service
+          export FLUX_TMPDIR=\$(mktemp -d /tmp/flux-\${SLURM_JOB_ID}-XXXXX)
+          mkdir -p \$FLUX_TMPDIR
+
+          # Generate resource config for Slurm allocation
+          NODELIST=\$(scontrol show hostnames \$SLURM_JOB_NODELIST | tr '\n' ',' | sed 's/,\$//')
+          flux R encode --hosts="\$NODELIST" --cores=0-1 > \$FLUX_TMPDIR/R
+
+          echo "=== Flux-Slurm Integration ==="
+          echo "Slurm Job ID: \$SLURM_JOB_ID"
+          echo "Nodes: \$NODELIST"
+          echo "Flux tmpdir: \$FLUX_TMPDIR"
+          echo "=============================="
+
+          EOF
+
+          if [[ "$INTERACTIVE" == "true" ]]; then
+              cat >> $TMPSCRIPT << EOF
+          # Start interactive Flux session
+          exec srun --mpi=none flux start -o,-Slog-filename=\$FLUX_TMPDIR/flux.log \\
+              --setattr=resource.R="\$FLUX_TMPDIR/R" \\
+              --setattr=statedir="\$FLUX_TMPDIR" \\
+              /bin/bash
+          EOF
+              sbatch --pty $TMPSCRIPT
+          elif [[ -n "$FLUX_CMD" ]]; then
+              cat >> $TMPSCRIPT << EOF
+          # Execute Flux command
+          exec srun --mpi=none flux start -o,-Slog-filename=\$FLUX_TMPDIR/flux.log \\
+              --setattr=resource.R="\$FLUX_TMPDIR/R" \\
+              --setattr=statedir="\$FLUX_TMPDIR" \\
+              bash -c "$FLUX_CMD"
+          EOF
+              sbatch $TMPSCRIPT
+          else
+              echo "Error: No command specified. Use --interactive or provide command after --"
+              usage
+              exit 1
+          fi
+
+    - name: Create documentation for Flux-Slurm integration
       copy:
-        dest: /etc/systemd/system/flux-broker.service
+        dest: /opt/flux-slurm/README.md
         mode: '0644'
         content: |
-          [Unit]
-          Description=Flux Broker Service
-          After=network.target
+          # Flux-Slurm Integration
 
-          [Service]
-          ExecStart=/usr/local/bin/flux-broker-start.sh
-          Restart=on-failure
-          User=root
-          WorkingDirectory=/root
+          This deployment uses Flux as a secondary scheduler within Slurm allocations rather than as a standalone cluster service.
 
-          [Install]
-          WantedBy=multi-user.target
+          ## How it works
 
-    - name: Reload systemd daemon
-      ansible.builtin.systemd:
-        daemon_reload: yes
+          1. **Slurm manages resources**: Slurm allocates nodes, cores, and time limits
+          2. **Flux manages workloads**: Within the allocation, Flux handles job scheduling and execution
+          3. **Dynamic instances**: Each Slurm job can start its own Flux instance across allocated nodes
 
-    - name: Enable and start flux-broker
-      ansible.builtin.systemd:
-        name: flux-broker
-        enabled: yes
-        state: started
+          ## Usage Examples
 
-    - name: Wait for flux broker socket to appear
-      ansible.builtin.wait_for:
-        path: /run/flux/local
-        timeout: 30
+          ### Interactive Flux Session
+          ```bash
+          # Request 2 nodes for 1 hour with interactive Flux
+          flux-submit --interactive --nodes 2 --time 01:00:00
+          
+          # Once inside, use Flux normally
+          flux submit --cc=1-4 hostname
+          flux jobs
+          ```
 
-- name: Setup Flux node service (compute nodes only)
-  when: not is_headnode
-  block:
-    - name: Set headnode IP fact
-      set_fact:
-        headnode_ip: "{{ hostvars[groups['head_node'][0]]['ansible_default_ipv4']['address'] }}"
+          ### Batch Flux Jobs
+          ```bash
+          # Submit a batch job that runs Flux commands
+          flux-submit --nodes 4 --time 00:30:00 -- flux submit --cc=1-8 'echo "Hello from $(hostname)"'
+          ```
 
-    - name: Create systemd unit for Flux node
-      copy:
-        dest: /etc/systemd/system/flux.service
-        content: |
-          [Unit]
-          Description=Flux Node Service
-          After=network.target
+          ### Using Template Scripts
+          ```bash
+          # Submit predefined templates
+          sbatch /opt/flux-slurm/flux-interactive.sh
+          sbatch /opt/flux-slurm/flux-job-example.sh
+          ```
 
-          [Service]
-          ExecStart=/bin/bash -c 'source /etc/profile.d/flux.sh && flux start --connect=tcp://{{ headnode_ip }}:8050'
-          Restart=on-failure
-          User=ubuntu
-          WorkingDirectory=/home/ubuntu
+          ## Architecture Benefits
 
-          [Install]
-          WantedBy=multi-user.target
-        owner: root
-        group: root
-        mode: '0644'
+          - **Resource isolation**: Each Flux instance is isolated within its Slurm allocation
+          - **No system services**: No complex cluster-wide Flux broker services to manage
+          - **Flexible scaling**: Users can request exactly the resources they need
+          - **Slurm integration**: Leverages existing Slurm features like accounting, limits, priorities
 
-    - name: Reload systemd daemon
-      systemd:
-        daemon_reload: yes
+          ## Files
 
-    - name: Enable and start Flux node service
-      systemd:
-        name: flux
-        enabled: true
-        state: started
+          - `/opt/flux-slurm/`: Template scripts and documentation
+          - `/usr/local/bin/flux-submit`: Helper script for submitting Flux jobs
+          - Examples in this directory show different usage patterns
 
-- name: Run flux ping to validate connectivity (compute nodes only)
-  when: not is_headnode
+- name: Display Flux-Slurm integration information
+  when: is_headnode
+  debug:
+    msg:
+      - "=== Flux-Slurm Integration Deployed ==="
+      - "Flux now runs within Slurm allocations instead of standalone services"
+      - ""
+      - "Usage:"
+      - "  flux-submit --interactive --nodes 2    # Interactive session"
+      - "  flux-submit --nodes 4 -- flux submit --cc=1-8 hostname  # Batch job"
+      - ""
+      - "Templates available in /opt/flux-slurm/"
+      - "Documentation: /opt/flux-slurm/README.md"
+
+# === FINALIZE ARCHIVE (Head node only) ===
+- name: Update archive with Flux configuration 
+  when: is_headnode
   shell: |
-    . /etc/profile.d/flux.sh
-    flux ping
-  register: ping_result
-  failed_when: ping_result.rc != 0
+    # Add Flux configuration to existing archive if it exists
+    if [ -f /data/packages/flux_stack.tar.gz ] && [ -d /etc/flux ]; then
+      echo "Adding Flux configuration to archive..."
+      tar -uf /data/packages/flux_stack.tar.gz -C / etc/flux || true
+      gzip /data/packages/flux_stack.tar.gz 2>/dev/null || true
+    fi
+    ls -la /data/packages/flux_stack.tar.gz
+  register: final_archive_result
+  failed_when: false
+
+- name: Show final archive results
+  when: is_headnode
+  debug:
+    msg: "{{ final_archive_result.stdout_lines }}"

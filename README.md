@@ -31,49 +31,71 @@ It uses [**Terraform**](https://www.terraform.io/) or [OpenTofu](https://opentof
 
 ## How to Use
 
-### 1. Prerequisites
-- Ensure you have the necessary credentials and access to your Oxide Rack.
-- Install Terraform or OpenTofu and ensure it's configured to work with your Oxide Rack.
-- Install Ansible on your local machine or a control node.
+### Quick Start (Recommended)
 
-### 2. Clone this Repository
+1. **Prerequisites**
+   - Ensure you have the necessary credentials and access to your Oxide Rack
+   - Install Terraform/OpenTofu and Ansible
+   - Clone this repository: `git clone https://github.com/qdzlu/oxide-slurm.git`
+
+2. **Interactive Setup**
+   ```bash
+   ./setup.sh configure
+   ```
+   This will guide you through:
+   - Cluster type selection (Slurm vs Flux)
+   - Node count configuration
+   - Spack mirror setup (simplifies package installation)
+   - Generates all required configuration files
+
+3. **Infrastructure Provisioning**
+   ```bash
+   cd terraform
+   cp terraform.tfvars.example terraform.tfvars
+   # Edit terraform.tfvars with your Oxide Rack details
+   terraform init
+   terraform apply
+   ```
+
+4. **Deploy Cluster**
+   ```bash
+   ./setup.sh deploy
+   ```
+
+### Manual Configuration (Advanced)
+
+If you prefer manual setup:
+
+1. **Prerequisites**
+   - Install Terraform or OpenTofu and ensure it's configured to work with your Oxide Rack
+   - Install Ansible on your local machine or a control node
+
+2. **Infrastructure with Terraform**
+   - Navigate to the Terraform directory: `cd terraform`
+   - Download an Ubuntu base image and [upload it](https://docs.oxide.computer/guides/creating-and-sharing-images) to the Oxide Rack
+   - Edit `terraform.tfvars` with your Oxide Rack credentials and configuration
+   - Initialize and apply: `terraform init && terraform apply`
+   - This creates your VPC, instances, firewall rules, and generates the `hosts.ini` file
+
+3. **Configure Spack Mirrors (Optional)**
+   - Edit `ansible/group_vars/all.yml` to configure Spack mirror URLs
+   - Leave empty for direct internet downloads (slower but more reliable)
+
+4. **Deploy with Ansible**
+   - Navigate to the Ansible directory: `cd ansible`
+   - **For Slurm cluster:** `ansible-playbook -i inventory/hosts.ini playbooks/slurm-cluster.yml`
+   - **For Flux cluster:** `ansible-playbook -i inventory/hosts.ini playbooks/flux-cluster.yml`
+
+### Setup Script Commands
+
 ```bash
-git clone https://github.com/qdzlu/oxide-slurm.git
-````
-
-### 1. Provision Infrastructure with Terraform
-- Navigate to the Terraform directory:
-  ```bash
-  cd terraform
-  ```
-- Download an Ubuntu base image and [upload it](https://docs.oxide.computer/guides/creating-and-sharing-images) 
-to the Oxide Rack. Make note of the Image ID, as you will need this value in the `terraform.tfvars` file.
-
-- Edit the `terraform.tfvars` file to set your Oxide Rack credentials and other variables.
-
-- Initialize and apply the configuration:
-  ```bash
-  terraform init
-  terraform apply
-  ```
-- This will create your VPC, instances, firewall rules, and generate the `hosts.ini` file in the project root.
-
-### 4. Configure the Cluster with Ansible
-- Navigate to the Ansible directory:
-  ```bash
-  cd ansible
-  ```
-- Choose your cluster type and run the appropriate playbook:
-  
-  **For Slurm cluster:**
-  ```bash
-  ansible-playbook playbooks/slurm-cluster.yml
-  ```
-  
-  **For Flux cluster:**
-  ```bash
-  ansible-playbook playbooks/flux-cluster.yml
-  ```
+./setup.sh configure     # Interactive configuration
+./setup.sh deploy        # Deploy cluster
+./setup.sh status        # Show current config
+./setup.sh validate      # Check prerequisites
+./setup.sh clean         # Remove configuration
+./setup.sh help          # Show help
+```
 
 ## Troubleshooting
 
@@ -119,6 +141,10 @@ oxide-slurm/
 ## License
 
 This project is released under the [MIT License](LICENSE).
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests.
 
 ## Contact
 
